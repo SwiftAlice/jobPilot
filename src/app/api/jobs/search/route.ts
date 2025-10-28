@@ -1,16 +1,20 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-// In Vercel, require JOB_SCRAPER_API_URL. In local dev, default to localhost.
+// In Vercel, prefer server env JOB_SCRAPER_API_URL; fallback to NEXT_PUBLIC_JOB_SCRAPER_API_URL.
+// In local dev, default to localhost.
 const runningOnVercel = !!process.env.VERCEL;
-const JOB_SCRAPER_API_URL = process.env.JOB_SCRAPER_API_URL || (!runningOnVercel ? 'http://localhost:5000' : '');
+const JOB_SCRAPER_API_URL =
+  process.env.JOB_SCRAPER_API_URL ||
+  process.env.NEXT_PUBLIC_JOB_SCRAPER_API_URL ||
+  (!runningOnVercel ? 'http://localhost:5000' : '');
 
 export async function POST(request: NextRequest) {
   console.log('[Next.js Proxy] POST request received at /api/jobs/search');
 
   if (!JOB_SCRAPER_API_URL) {
-    console.error('[Next.js Proxy] Missing JOB_SCRAPER_API_URL env var');
+    console.error('[Next.js Proxy] Missing JOB_SCRAPER_API_URL/NEXT_PUBLIC_JOB_SCRAPER_API_URL env var');
     return NextResponse.json(
-      { error: 'Backend URL not configured. Set JOB_SCRAPER_API_URL in Vercel project settings.' },
+      { error: 'Backend URL not configured. Set JOB_SCRAPER_API_URL or NEXT_PUBLIC_JOB_SCRAPER_API_URL.' },
       { status: 500 }
     );
   }
