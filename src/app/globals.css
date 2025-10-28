@@ -1,0 +1,265 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Improve SVG icon rendering in printed/DOM-to-PDF output */
+.print-smooth {
+  shape-rendering: geometricPrecision;
+  text-rendering: geometricPrecision;
+  image-rendering: -webkit-optimize-contrast;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Tweak icon baseline only during PDF export (html2canvas snapshot) */
+.pdf-exporting svg {
+  vertical-align: middle !important;
+  transform: translateY(-1px);
+}
+.pdf-exporting .inline-flex > svg {
+  margin-top: 0 !important;
+}
+
+/* Fixed-size container to align icons consistently with text */
+.icon-box {
+  display: inline-flex;
+  width: 18px;
+  height: 18px;
+  align-items: center;
+  justify-content: center;
+  vertical-align: middle;
+  line-height: 0; /* eliminate inline baseline gaps */
+}
+
+/* Ensure SVG fills the box and doesn't introduce extra baseline space */
+.icon-box svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* Slight nudge only during export to match rasterization baseline */
+.pdf-exporting .icon-box {
+  transform: translateY(1px);
+}
+
+/* Export-only icon text fallback */
+.export-text { display: none; }
+.pdf-exporting .export-text { display: inline; margin-right: 6px; }
+.pdf-exporting .export-text::after { content: ''; }
+.pdf-exporting .icon-box { display: none; }
+
+/* Google Fonts */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=Montserrat:wght@600;700&family=Open+Sans:wght@400;600&family=Roboto:wght@400;500&display=swap');
+
+:root {
+  /* Light Mode */
+  --background: #FAFAFA;               /* Professional base */
+  --foreground: #101418;
+
+  --navy: #1D3557;                     /* Trust color */
+  --teal: #00BFA6;                     /* Accent */
+  --violet: #6C63FF;                   /* Accent */
+
+  --bg-start: #FAFAFA;                 /* soft gradient */
+  --bg-end: #F4F7FF;
+
+  --card-bg: #FFFFFF;
+  --card-border: #EAEAEA;
+  --muted: #6B7280;
+}
+
+
+/* Dark Mode */
+[data-theme="dark"] {
+  --background: #0B1020;               /* charcoal */
+  --foreground: #E7EAF3;
+
+  --bg-start: #0B1020;
+  --bg-end: #0F1730;
+
+  --card-bg: #121A33;
+  --card-border: #1E2A4D;
+  --muted: #A3ACBE;
+}
+
+body {
+  background: linear-gradient(180deg, var(--bg-start) 0%, var(--bg-end) 100%);
+  color: var(--foreground);
+  font-family: 'Inter', 'Open Sans', 'Roboto', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Remove default bright blue text selection background */
+::selection {
+  background: rgba(0, 0, 0, 0.06);
+  color: inherit;
+}
+
+h1, h2, h3, .heading {
+  font-family: 'Inter', 'Montserrat', system-ui, -apple-system, sans-serif;
+}
+
+/* Ensure form controls inherit the global font for consistency */
+input, textarea, select, button {
+  font-family: inherit;
+}
+
+/* Lighter weight for editable fields */
+input, textarea, select {
+  font-weight: 400;
+  font-size: 14px; /* reduced ~2px from default 16px */
+  line-height: 1.4;
+}
+::placeholder {
+  color: #9CA3AF; /* gray-400 */
+  opacity: 1;     /* ensure consistent across browsers */
+}
+
+/* Themed helpers */
+.card {
+  background: var(--card-bg);
+  border-radius: 12px;
+  box-shadow: 0 2px 10px rgba(0,0,0,0.06);
+  border: 1px solid var(--card-border);
+}
+
+/* Job card hover micro-animation */
+.card-hover {
+  position: relative;
+  transition: transform 220ms ease, box-shadow 220ms ease, border-color 220ms ease;
+}
+.card-hover:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 16px 36px rgba(0,0,0,0.14), 0 4px 12px rgba(0,0,0,0.08);
+  border-color: rgba(0, 191, 166, 0.45); /* teal edge glow */
+}
+.card-hover:after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 12px;
+  pointer-events: none;
+  transition: opacity 220ms ease;
+  background: radial-gradient(140px 70px at var(--mx, 50%) var(--my, 50%), rgba(0,191,166,0.12), transparent 65%);
+  opacity: 0;
+}
+.card-hover:hover:after { opacity: 1; }
+
+/* Inward appearance for list cards */
+@keyframes inwardPop {
+  0% { opacity: 0; transform: translateY(8px) scale(1.02); }
+  100% { opacity: 1; transform: translateY(0) scale(1); }
+}
+.anim-inward { animation: inwardPop 420ms cubic-bezier(0.16, 1, 0.3, 1) both; }
+
+.btn-primary {
+  background: var(--teal);
+  color: #fff;
+  border-radius: 8px;
+  padding: 8px 16px;
+}
+.btn-primary:hover {
+  filter: brightness(0.95);
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--card-border);
+  background: rgba(0, 191, 166, 0.10); /* teal tint */
+  color: var(--navy);
+  border-radius: 9999px;
+  padding: 4px 10px;
+  font-size: 12px;
+}
+
+/* Simple, elegant entrance animation for cards */
+@keyframes fadeSlideIn {
+  0% { opacity: 0; transform: translateY(-6px) scale(0.98); }
+  100% { opacity: 1; transform: translateY(0) scale(1); }
+}
+.anim-card {
+  animation: fadeSlideIn 400ms ease both;
+}
+
+/* Chip hover micro-interactions */
+.chip-interactive {
+  transition: transform 200ms ease, box-shadow 200ms ease, opacity 200ms ease;
+}
+.chip-interactive:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 10px rgba(0,0,0,0.06);
+}
+
+.container-page {
+  max-width: 1120px;
+  margin: 0 auto;
+  padding: 0 16px;
+}
+
+/* Progress bar (for onboarding steps) */
+.progress-track {
+  width: 100%;
+  height: 6px;
+  background: rgba(0,0,0,0.06);
+  border-radius: 999px;
+}
+.progress-bar {
+  height: 6px;
+  background: linear-gradient(90deg, var(--teal), var(--violet));
+  border-radius: 999px;
+}
+
+/* Print-optimized styles for PDF generation */
+.print-optimized {
+  page-break-inside: avoid;
+}
+
+.print-optimized h1, .print-optimized h2, .print-optimized h3 {
+  page-break-after: avoid;
+}
+
+.print-optimized ul, .print-optimized ol {
+  page-break-inside: avoid;
+}
+
+.print-optimized li {
+  page-break-inside: avoid;
+}
+
+@media print {
+  .print-optimized {
+    box-shadow: none !important;
+    margin: 0 !important;
+    padding: 20mm !important;
+  }
+}
+
+/* Normalize colors for PDF generation */
+.print-optimized .text-purple-600 { color: #7c3aed !important; }
+.print-optimized .text-blue-600 { color: #2563eb !important; }
+.print-optimized .text-indigo-600 { color: #4f46e5 !important; }
+.print-optimized .text-teal-600 { color: #0d9488 !important; }
+.print-optimized .text-gray-600 { color: #6b7280 !important; }
+.print-optimized .text-gray-700 { color: #374151 !important; }
+.print-optimized .text-gray-800 { color: #1f2937 !important; }
+.print-optimized .text-gray-900 { color: #111827 !important; }
+.print-optimized .bg-purple-50 { background-color: #faf5ff !important; }
+.print-optimized .bg-blue-50 { background-color: #eff6ff !important; }
+.print-optimized .bg-indigo-50 { background-color: #eef2ff !important; }
+.print-optimized .bg-teal-50 { background-color: #f0fdfa !important; }
+.print-optimized .bg-gray-50 { background-color: #f9fafb !important; }
+.print-optimized .bg-gray-100 { background-color: #f3f4f6 !important; }
+.print-optimized .bg-green-50 { background-color: #f0fdf4 !important; }
+.print-optimized .bg-green-100 { background-color: #dcfce7 !important; }
+.print-optimized .border-purple-200 { border-color: #e9d5ff !important; }
+.print-optimized .border-blue-200 { border-color: #bfdbfe !important; }
+.print-optimized .border-indigo-200 { border-color: #c7d2fe !important; }
+.print-optimized .border-teal-200 { border-color: #99f6e4 !important; }
+.print-optimized .border-gray-200 { border-color: #e5e7eb !important; }
+.print-optimized .border-gray-300 { border-color: #d1d5db !important; }
+.print-optimized .border-green-200 { border-color: #bbf7d0 !important; }
+.print-optimized .from-purple-600 { background: linear-gradient(to right, #7c3aed, #a855f7) !important; }
+.print-optimized .to-blue-600 { background: linear-gradient(to right, #7c3aed, #2563eb) !important; }

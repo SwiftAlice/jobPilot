@@ -1,0 +1,17 @@
+# MCP SDK (install from GitHub)
+# Run: pip3 install git+https://github.com/modelcontextprotocol/python-sdk.git
+
+# Optional NLP libraries (recommended for better accuracy)
+nltk>=3.8
+scikit-learn>=1.3.0
+spacy>=3.6.0
+
+# Optional document processing (for PDF/DOCX support)
+PyPDF2>=3.0.0
+python-docx>=0.8.11
+
+# Basic dependencies
+numpy>=1.24.0
+
+# Note: Install MCP SDK first with:
+# pip3 install git+https://github.com/modelcontextprotocol/python-sdk.git
