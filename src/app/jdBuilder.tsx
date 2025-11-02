@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useRef, useCallback } from 'react';
+import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { useResume } from '@/contexts/ResumeContext';
 import { 
   Download, 
@@ -640,6 +640,20 @@ const ResumeJDBuilder = () => {
   // Get current template
   const currentTemplate = resumeTemplates.find(t => t.id === selectedTemplate) || resumeTemplates[0];
 
+  const [authState, setAuthState] = useState({ authenticated: false, user: null });
+  useEffect(() => {
+    const getSession = async () => {
+      try {
+        const res = await fetch('/api/auth/session');
+        const data = await res.json();
+        setAuthState(data);
+      } catch {
+        setAuthState({ authenticated: false, user: null });
+      }
+    };
+    getSession();
+  }, []);
+
 
   // Show resume editor if enabled
   if (showResumeEditor) {
@@ -729,6 +743,8 @@ const ResumeJDBuilder = () => {
           tailorSummaryToJD={tailorSummaryToJD}
           isTailoringSummary={isTailoringSummary}
           inputJDForTailoring={inputJD}
+          authenticated={authState.authenticated}
+          user={authState.user}
         />
       </div>
     </div>

@@ -15,6 +15,61 @@ import json
 from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+def clean_html_preserve_structure(html_elem) -> str:
+    """
+    Clean HTML element but preserve structure (headings, paragraphs, lists, etc.)
+    Removes scripts, styles, but keeps formatting tags.
+    Preserves UTF-8 encoding for emojis and special characters.
+    """
+    if not html_elem:
+        return ''
+    
+    # If it's a BeautifulSoup element, get its inner HTML
+    if hasattr(html_elem, 'decode_contents'):
+        # BeautifulSoup Tag element - get contents with UTF-8
+        html_str = html_elem.decode_contents(formatter='html')
+    elif hasattr(html_elem, '__str__'):
+        html_str = str(html_elem)
+    else:
+        html_str = html_elem
+    
+    # Ensure html_str is a string and handle encoding
+    if isinstance(html_str, bytes):
+        html_str = html_str.decode('utf-8', errors='ignore')
+    
+    if not html_str:
+        return ''
+    
+    # Parse to clean it with UTF-8 support
+    soup = BeautifulSoup(html_str, 'html.parser', from_encoding='utf-8')
+    
+    # Remove unsafe/unwanted tags but keep structure
+    for tag in soup.find_all(['script', 'style', 'noscript', 'nav', 'header', 'footer', 'form', 'input', 'button']):
+        tag.decompose()
+    
+    # Remove onclick and other event handlers
+    for tag in soup.find_all(True):
+        # Remove all attributes except href for links and basic styling classes
+        allowed_attrs = ['href', 'target', 'rel']
+        tag.attrs = {k: v for k, v in tag.attrs.items() if k in allowed_attrs}
+    
+    # Get the cleaned HTML with UTF-8 encoding preserved
+    # BeautifulSoup in Python 3 returns Unicode strings by default
+    cleaned = str(soup)
+    # Ensure it's a string, not bytes
+    if isinstance(cleaned, bytes):
+        cleaned = cleaned.decode('utf-8', errors='ignore')
+    
+    # Clean up extra whitespace but preserve structure and special characters
+    cleaned = re.sub(r'\s+', ' ', cleaned, flags=re.UNICODE)  # Multiple spaces to single (Unicode-aware)
+    cleaned = re.sub(r'>\s+<', '><', cleaned)  # Spaces between tags
+    
+    # Ensure the result is a properly encoded UTF-8 string
+    if isinstance(cleaned, bytes):
+        cleaned = cleaned.decode('utf-8', errors='ignore')
+    
+    return cleaned.strip()
+
 # Enhanced skill extraction with comprehensive tech stack
 TECH_SKILLS = {
     'programming_languages': [
@@ -185,7 +240,7 @@ class LinkedInScraper:
         """Search LinkedIn jobs"""
         jobs = []
         keywords = ' '.join(query.keywords + query.skills)
-        location = query.location
+        location = query.location or ''  # Use empty string if None
         
         try:
             print(f"\n[LinkedIn] ========== SEARCH STARTED ==========")
@@ -239,8 +294,12 @@ class LinkedInScraper:
             
             response.raise_for_status()
             
+            # Ensure UTF-8 encoding for LinkedIn responses
+            if response.encoding and response.encoding.lower() != 'utf-8':
+                response.encoding = 'utf-8'
+            
             # Parse LinkedIn job listings (simplified - would need more sophisticated parsing)
-            soup = BeautifulSoup(response.text, 'html.parser')
+            soup = BeautifulSoup(response.text, 'html.parser', from_encoding='utf-8')
             
             # Try multiple selectors and log results
             print(f"\n[LinkedIn] ========== PARSING JOB CARDS ==========")
@@ -375,7 +434,8 @@ class LinkedInScraper:
                                     for selector in desc_selectors:
                                         desc_elem = soup.select_one(selector)
                                         if desc_elem:
-                                            full_desc = desc_elem.get_text(separator=' ', strip=True)
+                                            # Preserve HTML structure instead of plain text
+                                            full_desc = clean_html_preserve_structure(desc_elem)
                                             if len(full_desc) > 100:
                                                 return full_desc
                 except Exception as e:
@@ -799,8 +859,9 @@ class NaukriScraper:
                         full_desc_elem = detail_soup.find('div', class_='job-desc')
                     
                     if full_desc_elem:
-                        description = full_desc_elem.get_text(strip=True)
-                        print(f"[Naukri] Fetched full JD, length: {len(description)}")
+                        # Preserve HTML structure instead of plain text
+                        description = clean_html_preserve_structure(full_desc_elem)
+                        print(f"[Naukri] Fetched full JD (HTML), length: {len(description)}")
                     else:
                         print(f"[Naukri] Full JD not found, using snippet")
                     
@@ -964,7 +1025,11 @@ class NaukriScraper:
             response = session.get(url, timeout=10)
             response.raise_for_status()
             
-            detail_soup = BeautifulSoup(response.text, 'html.parser')
+            # Ensure UTF-8 encoding
+            if response.encoding and response.encoding.lower() != 'utf-8':
+                response.encoding = 'utf-8'
+            
+            detail_soup = BeautifulSoup(response.text, 'html.parser', from_encoding='utf-8')
             
             # Debug: Check HTML length
             print(f"[Naukri] Async fetch HTML length: {len(response.text)}")
@@ -980,8 +1045,11 @@ class NaukriScraper:
                 full_desc_elem = detail_soup.find('div', class_=lambda x: x and 'job-desc' in str(x).lower() if x else False)
             
             if full_desc_elem:
-                description = full_desc_elem.get_text(separator=' ', strip=True)
-                description = ' '.join(description.split())
+                # Preserve HTML structure instead of plain text
+                description = clean_html_preserve_structure(full_desc_elem)
+                # Keep a plain text version for skills extraction
+                description_text = full_desc_elem.get_text(separator=' ', strip=True)
+                description_text = ' '.join(description_text.split())
                 
                 # Extract skills from tags
                 skills_from_tags = []
@@ -993,8 +1061,8 @@ class NaukriScraper:
                         if skill:
                             skills_from_tags.append(skill)
                 
-                # Extract skills from text
-                skills_from_text = self.extract_skills_from_jd(description)
+                # Extract skills from text (use plain text version for better extraction)
+                skills_from_text = self.extract_skills_from_jd(description_text)
                 all_skills = list(set(skills_from_tags + skills_from_text))
                 job_data['skills_required'] = all_skills[:30]
                 
@@ -1038,7 +1106,12 @@ class NaukriScraper:
                     'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
                 })
                 response = session.get(url, timeout=10)
-                detail_soup = BeautifulSoup(response.text, 'html.parser')
+                
+                # Ensure UTF-8 encoding
+                if response.encoding and response.encoding.lower() != 'utf-8':
+                    response.encoding = 'utf-8'
+                
+                detail_soup = BeautifulSoup(response.text, 'html.parser', from_encoding='utf-8')
             finally:
                 # Always restore the original search page
                 try:
@@ -1094,17 +1167,16 @@ class NaukriScraper:
                         break
             
             if full_desc_elem:
-                # Get all text, including from nested elements
-                description = full_desc_elem.get_text(separator=' ', strip=True)
-                # Clean up extra whitespace
-                description = ' '.join(description.split())
+                # Preserve HTML structure instead of plain text
+                description = clean_html_preserve_structure(full_desc_elem)
                 
-                # If description is too short (less than 100 chars), try to get more content
-                if len(description) < 100:
-                    # Try getting all paragraph content
-                    paras = full_desc_elem.find_all('p')
-                    if paras:
-                        description = ' '.join([p.get_text(strip=True) for p in paras])
+                # If description is too short (less than 100 chars), use the element as-is
+                # (already extracted with HTML structure)
+                if len(description.strip()) < 100:
+                    # Fallback: try getting parent or wrapper element
+                    parent = full_desc_elem.find_parent(['div', 'section', 'article'])
+                    if parent:
+                        description = clean_html_preserve_structure(parent)
                 
                 # Extract key skills from JD (both from tags and description text)
                 # First try to find the skills tags on the page
@@ -2030,11 +2102,18 @@ class MultiPortalJobAggregator:
             scraper = self.scrapers[source]
             print(f"[MultiPortal] Scraper found for {source.value}: {type(scraper).__name__}")
             
-            keywords = ' '.join(query.keywords + query.skills)
-            location = query.location or ''  # Use empty string if location is None
-            # If user selected Remote/Any in where field, force remote mode
+            # If user selected Remote/Any in where field, add "remote" to keywords
             where = (getattr(query, 'where', '') or '').lower()
             is_remote_mode = 'remote' in where or where in ('any', 'anywhere')
+            
+            # Build keywords list - add "remote" if remote mode is selected
+            keywords_list = query.keywords.copy()
+            if is_remote_mode and 'remote' not in ' '.join(keywords_list).lower():
+                keywords_list.insert(0, 'remote')  # Add "remote" at the beginning
+                print("[MultiPortal] Remote mode detected - adding 'remote' to keywords")
+            
+            keywords = ' '.join(keywords_list + query.skills)
+            location = query.location or ''  # Use empty string if location is None
             if is_remote_mode:
                 print("[MultiPortal] Remote mode detected from 'where' field")
                 # Many APIs expect location empty for remote searches
@@ -2046,16 +2125,24 @@ class MultiPortalJobAggregator:
             
             if source == JobSource.LINKEDIN:
                 print(f"[MultiPortal] Using LinkedIn-specific search method")
-                result = scraper.search_jobs(query)
+                # Create modified query with remote in keywords if needed
+                modified_query = query
+                if is_remote_mode:
+                    # Create a copy of query with remote in keywords and empty location
+                    from copy import deepcopy
+                    modified_query = deepcopy(query)
+                    modified_query.keywords = keywords_list  # Use keywords with remote added
+                    modified_query.location = ''  # Empty location for remote searches
+                result = scraper.search_jobs(modified_query)
             elif source == JobSource.NAUKRI:
                 print(f"[MultiPortal] Using Naukri-specific search method (single keyword)")
-                # Use only the first keyword for Naukri, like LinkedIn
-                main_keyword = query.keywords[0] if query.keywords else 'engineer'
+                # Use only the first keyword for Naukri, include remote if needed
+                main_keyword = keywords_list[0] if keywords_list else 'engineer'
                 print(f"[MultiPortal] Main keyword for Naukri: {main_keyword}")
                 result = scraper.search_jobs(main_keyword, location, query.max_results)
             else:
                 print(f"[MultiPortal] Using generic search method for {source.value}")
-                # Pass is_remote_mode to scraper if it supports it
+                # Pass keywords with remote if needed
                 result = scraper.search_jobs(keywords, location, query.max_results)
             
             print(f"[MultiPortal] {source.value} returned {len(result)} jobs")

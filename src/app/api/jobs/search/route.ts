@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { createSupabaseServerClient } from '@/lib/supabaseServer';
 
 // In Vercel, prefer server env JOB_SCRAPER_API_URL; fallback to NEXT_PUBLIC_JOB_SCRAPER_API_URL.
 // In local dev, default to localhost.
@@ -85,6 +86,22 @@ export async function POST(request: NextRequest) {
       errors: data.errors
     });
     
+    // Filter out liked jobs for user
+    try {
+      const supabase = await createSupabaseServerClient();
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user && Array.isArray(data.jobs)) {
+        const { data: likedRows } = await supabase
+          .from('user_job_actions')
+          .select('job_id')
+          .eq('user_id', user.id)
+          .eq('action', 'liked');
+        const likedIds = likedRows?.map(row => row.job_id) || [];
+        data.jobs = data.jobs.filter((job: any) => job.id && !likedIds.includes(job.id));
+      }
+    } catch (err) {
+      // Silent fail: don't block if filter fails
+    }
     return NextResponse.json(data);
 
   } catch (error) {

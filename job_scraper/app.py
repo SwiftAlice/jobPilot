@@ -1,7 +1,7 @@
 """
 Job scraper Flask API application
 """
-from flask import Flask, request, jsonify, render_template_string
+from flask import Flask, request, jsonify, render_template_string, Response
 from flask_cors import CORS
 import json
 from datetime import datetime
@@ -19,6 +19,9 @@ import os
 
 app = Flask(__name__)
 CORS(app)
+
+# Ensure UTF-8 encoding for JSON responses
+app.config['JSON_AS_ASCII'] = False  # This ensures Unicode characters are not escaped
 
 # Initialize job aggregators
 job_aggregator = JobAggregator()

@@ -4,6 +4,42 @@ import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { Search, MapPin, Building, ExternalLink, Clock, DollarSign, User, Briefcase, Star, Globe, Briefcase as BriefcaseIcon } from 'lucide-react';
 import { useResume } from '@/contexts/ResumeContext';
+import { supabase } from '@/lib/supabaseClient';
+import JobsYouLiked from './JobsYouLiked';
+// import { toast } from 'react-hot-toast'; // COMMENTED OUT for linter
+
+// Helper function to strip HTML and decode entities for card previews
+const stripHtmlToPlainText = (html: string): string => {
+  if (!html) return '';
+  
+  // Check if we're in browser environment
+  if (typeof document === 'undefined') {
+    // Fallback for SSR: basic regex-based stripping
+    return html
+      .replace(/<[^>]*>/g, ' ') // Remove HTML tags
+      .replace(/&nbsp;/g, ' ')
+      .replace(/&amp;/g, '&')
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&quot;/g, '"')
+      .replace(/&#39;/g, "'")
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+  
+  // Create a temporary DOM element to parse HTML and extract text
+  // This handles all HTML entities properly
+  const tmp = document.createElement('div');
+  tmp.innerHTML = html;
+  
+  // Get text content (automatically handles all HTML entities)
+  let plainText = tmp.textContent || tmp.innerText || '';
+  
+  // Clean up extra whitespace
+  plainText = plainText.replace(/\s+/g, ' ').trim();
+  
+  return plainText;
+};
 
 interface JobPosting {
   id: string;
@@ -92,6 +128,20 @@ export default function JobSearch({ onJobSelect, className = '' }: JobSearchProp
   const [compactMode, setCompactMode] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
+  const [authEmail, setAuthEmail] = useState<string | null>(null);
+  const [hiddenJobIds, setHiddenJobIds] = useState<string[]>([]);
+  // Cache for loaded pages: Map<pageNumber, { jobs: JobPosting[], pagination: PaginationInfo }>
+  const [jobsCache, setJobsCache] = useState<Map<number, { jobs: JobPosting[], pagination: any, total_found: number }>>(new Map());
+  // Track search parameters to clear cache when they change
+  const [lastSearchKey, setLastSearchKey] = useState<string>('');
+  const [likedJobs, setLikedJobs] = useState<any[]>([]);
+  const [recruitersOpen, setRecruitersOpen] = useState(false);
+  const [recruitersLoading, setRecruitersLoading] = useState(false);
+  const [recruitersError, setRecruitersError] = useState<string | null>(null);
+  const [recruiters, setRecruiters] = useState<Array<{ contact: any; templates: any; mailto: string }>>([]);
+  const [selectedJob, setSelectedJob] = useState<JobPosting | null>(null);
+  const [gmailAuthenticated, setGmailAuthenticated] = useState(false);
+  const [gmailTokens, setGmailTokens] = useState<any>(null);
 
   // Deterministic themed colors for skill pills (restricted to theme colors)
   const skillColorClasses = [
@@ -151,25 +201,98 @@ export default function JobSearch({ onJobSelect, className = '' }: JobSearchProp
   }, [resumeData, isPrefilled, resumeLoading]);
 
   useEffect(() => {
+    let mounted = true;
+    const load = async () => {
+      try {
+        const res = await fetch('/api/auth/session', { cache: 'no-store' });
+        const data = await res.json();
+        if (mounted) setAuthEmail(data?.authenticated ? data.user?.email ?? null : null);
+      } catch {
+        if (mounted) setAuthEmail(null);
+      }
+    };
+    load();
+  }, []);
+
+  useEffect(() => {
     const onScroll = () => setShowScrollTop(window.scrollY > 400);
     window.addEventListener('scroll', onScroll);
     return () => window.removeEventListener('scroll', onScroll);
   }, []);
 
-  // Trigger search when pagination changes
+  // Fetch liked jobs on mount and when actions change
   useEffect(() => {
-    if (results && (currentPage !== results.pagination?.page || pageSize !== results.pagination?.page_size)) {
-      // Always fetch from backend when navigating to new pages
-      console.log(`Fetching page ${currentPage} from backend (current: ${results.pagination?.page}, size: ${results.pagination?.page_size})`);
-      handleSearch(new Event('submit') as any);
+    const fetchLikedJobs = async () => {
+      try {
+        const res = await fetch('/api/jobs/liked');
+        const data = await res.json();
+        setLikedJobs(data.liked || []);
+      } catch (err) {
+        console.error('Failed to fetch liked jobs:', err);
+        setLikedJobs([]);
+      }
+    };
+    fetchLikedJobs();
+  }, [hiddenJobIds]); // Refresh when jobs are liked
+
+  // Handle pagination - check cache first, only fetch if not cached
+  useEffect(() => {
+    // Only trigger if we have results (meaning a search has been performed)
+    if (!results) return;
+    
+    // Don't trigger on initial mount or if page matches current results
+    if (currentPage === results.pagination?.page && pageSize === results.pagination?.page_size) {
+      return;
     }
+    
+    // Check if page size changed - if so, clear cache and refetch
+    if (pageSize !== results.pagination?.page_size) {
+      setJobsCache(new Map());
+      setPaginationLoading(true);
+      // Trigger search with current page
+      const event = new Event('submit') as any;
+      handleSearch(event);
+      return;
+    }
+    
+    // Check if current page is different from displayed page
+    if (currentPage !== results.pagination?.page) {
+      // Check if this page is already in cache
+      const cachedPage = jobsCache.get(currentPage);
+      if (cachedPage) {
+        console.log(`[Cache] Loading page ${currentPage} from cache`);
+        setPaginationLoading(false);
+        setResults({
+          ...results,
+          jobs: cachedPage.jobs,
+          pagination: cachedPage.pagination,
+          total_found: cachedPage.total_found
+        });
+      } else {
+        // Page not in cache, fetch from backend
+        console.log(`[Cache] Page ${currentPage} not in cache, fetching from backend`);
+        setPaginationLoading(true);
+        const event = new Event('submit') as any;
+        handleSearch(event);
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentPage, pageSize]);
 
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
     setError(null);
-    setResults(null);
+    
+    // Check if this is a new search (page 1) or just pagination
+    // If page is 1, clear cache as it's a new search
+    if (currentPage === 1) {
+      setJobsCache(new Map());
+      setResults(null);
+    } else {
+      // For pagination, we'll set paginationLoading instead
+      setPaginationLoading(true);
+    }
 
     // Normalize location: pass empty string for Remote/Any
     const normalizedLocation = (searchData.where && searchData.where.toLowerCase() !== 'remote' && searchData.where.toLowerCase() !== 'any') 
@@ -188,6 +311,25 @@ export default function JobSearch({ onJobSelect, className = '' }: JobSearchProp
       page: currentPage,
       page_size: pageSize
     };
+    
+    // Create a search key to detect if search parameters changed
+    const searchKey = JSON.stringify({
+      keywords: requestBody.keywords,
+      location: requestBody.location,
+      skills: requestBody.skills,
+      experience_level: requestBody.experience_level,
+      where: requestBody.where,
+      sources: requestBody.sources.sort()
+    });
+    
+    // If search parameters changed (not just page), clear cache
+    if (searchKey !== lastSearchKey && currentPage === 1) {
+      console.log('[Cache] Search parameters changed, clearing cache');
+      setJobsCache(new Map());
+      setLastSearchKey(searchKey);
+    } else if (currentPage === 1) {
+      setLastSearchKey(searchKey);
+    }
     
     console.log('[Frontend] Sending search request:', requestBody);
 
@@ -218,6 +360,20 @@ export default function JobSearch({ onJobSelect, className = '' }: JobSearchProp
           data.jobs = deduplicateJobs(data.jobs);
         }
         
+      // Cache the results for this page
+      if (data.pagination && data.pagination.page) {
+        setJobsCache(prev => {
+          const newCache = new Map(prev);
+          newCache.set(data.pagination.page, {
+            jobs: data.jobs || [],
+            pagination: data.pagination,
+            total_found: data.total_found || 0
+          });
+          return newCache;
+        });
+        console.log(`[Cache] Cached page ${data.pagination.page} with ${data.jobs?.length || 0} jobs`);
+      }
+        
       setResults(data);
       if (data?.jobs?.length > 0) {
         setCompactMode(true);
@@ -226,6 +382,7 @@ export default function JobSearch({ onJobSelect, className = '' }: JobSearchProp
       setError(err instanceof Error ? err.message : 'An error occurred');
     } finally {
       setLoading(false);
+      setPaginationLoading(false);
     }
   };
 
@@ -265,145 +422,182 @@ export default function JobSearch({ onJobSelect, className = '' }: JobSearchProp
     target.style.removeProperty('--my');
   };
 
+  // Handler for liking a job
+  const handleLikeJob = async (job: JobPosting) => {
+    try {
+      const jobPayload = {
+        id: job.id,
+        title: job.title,
+        company: job.company,
+        location: job.location,
+        job_url: job.url,
+        posted_at: job.posted_date || null,
+        source: job.source,
+        description: (job.description && job.description.trim()) || null
+      };
+      
+      console.log('[Frontend] Saving job:', { 
+        id: jobPayload.id, 
+        title: jobPayload.title,
+        posted_at: jobPayload.posted_at,
+        has_description: !!jobPayload.description 
+      });
+      
+      const response = await fetch('/api/jobs/like', {
+        method: 'POST',
+        body: JSON.stringify({ job: jobPayload }),
+        headers: { 'Content-Type': 'application/json' }
+      });
+      
+      if (!response.ok) {
+        const errorData = await response.json();
+        console.error('Failed to save job:', errorData.error);
+        return;
+      }
+      
+      setHiddenJobIds(ids => [...ids, job.id]);
+      // Refresh liked jobs list after saving
+      const likedRes = await fetch('/api/jobs/liked');
+      const likedData = await likedRes.json();
+      setLikedJobs(likedData.liked || []);
+    } catch (err) {
+      console.error('Error saving job:', err);
+    }
+  };
+
+  const handleQuickLink = async (job: JobPosting) => {
+    try {
+      setSelectedJob(job);
+      setRecruitersOpen(true);
+      setRecruitersLoading(true);
+      setRecruitersError(null);
+      setRecruiters([]);
+
+      // Count any action as like - await to ensure it completes
+      await handleLikeJob(job);
+
+      // Get candidate name from resume data or use a default
+      const candidateName = resumeData?.personalInfo?.fullName || 'Candidate';
+      
+      const res = await fetch('/api/recruiter', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          jobTitle: job.title, // API expects jobTitle, not title
+          company: job.company,
+          location: job.location || undefined,
+          candidateName: candidateName, // Required field
+          resumeData: resumeData || undefined, // Optional but helpful
+        })
+      });
+
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({ error: 'Unknown error' }));
+        throw new Error(errorData.error || `Failed to fetch recruiters: ${res.status}`);
+      }
+      const data = await res.json();
+      // API returns { success: true, data: [...] } or { success: false, error: ... }
+      if (!data.success) {
+        throw new Error(data.error || 'Failed to fetch recruiters');
+      }
+      // Extract the data array from the response
+      const list = Array.isArray(data?.data) ? data.data : (Array.isArray(data?.recruiters) ? data.recruiters : []);
+      setRecruiters(list);
+    } catch (e) {
+      console.error('Error fetching recruiters:', e);
+      setRecruitersError(e instanceof Error ? e.message : 'Unknown error');
+    } finally {
+      setRecruitersLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetch('/api/jobs/liked')
+      .then(res => res.json())
+      .then(({ liked }) => setLikedJobs(liked || []));
+  }, [results, hiddenJobIds]);
+
+  // Check for Gmail tokens on mount
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      const storedTokens = localStorage.getItem('gmailTokens');
+      if (storedTokens) {
+        const tokens = JSON.parse(storedTokens);
+        setGmailTokens(tokens);
+        setGmailAuthenticated(true);
+      }
+    } catch (error) {
+      console.error('Error loading stored Gmail tokens:', error);
+    }
+  }, []);
+
+  const handleGmailAuth = async () => {
+    try {
+      const response = await fetch('/api/gmail/auth');
+      const data = await response.json();
+      
+      if (data.success) {
+        const popup = window.open(
+          data.authUrl, 
+          'gmailAuth', 
+          'width=500,height=600,scrollbars=yes,resizable=yes'
+        );
+        
+        const checkClosed = setInterval(() => {
+          if (popup?.closed) {
+            clearInterval(checkClosed);
+            const tokens = localStorage.getItem('gmailTokens');
+            if (tokens) {
+              setGmailTokens(JSON.parse(tokens));
+              setGmailAuthenticated(true);
+              alert('✅ Gmail authentication successful! You can now create drafts.');
+            }
+          }
+        }, 1000);
+        
+        alert('✅ Gmail authentication popup opened. Complete the OAuth flow in the popup window.');
+      }
+    } catch (e) {
+      console.error('Gmail auth error:', e);
+      alert('Failed to authenticate with Gmail');
+    }
+  };
+
+  const handleLinkedInOpen = (contact: any, templates: any) => {
+    try {
+      const personalizedMessage = templates.linkedinMessage;
+      alert(`💼 LinkedIn Message Ready!\n\n📝 Pre-drafted message:\n\n"${personalizedMessage}"\n\n\nClick OK to open LinkedIn profile and send this message.`);
+      const linkedinUrl = contact.linkedinUrl;
+      window.open(linkedinUrl, '_blank');
+    } catch (e) {
+      console.error('Error opening LinkedIn:', e);
+      window.open(contact.linkedinUrl, '_blank');
+    }
+  };
+
+  const handleOpenGmail = (mailtoUrl: string) => {
+    if (gmailAuthenticated) {
+      // For now, just open mailto link. Full Gmail draft functionality can be added later if needed
+      window.open(mailtoUrl, '_blank');
+    } else {
+      handleGmailAuth();
+    }
+  };
+
   return (
     <div className={`min-h-screen bg-white ${className}`}>
-      {/* Header */}
-      <header className="sticky top-0 z-50">
-        <div className="container-page py-4">
-          <div className="flex items-center justify-between h-16 rounded-xl bg-white/60 backdrop-blur-xl px-4 md:px-6">
-            <Link href="/" className="flex items-center space-x-3">
-              <span className="h-12 w-12 rounded-xl bg-gradient-to-br from-blue-600 to-teal-500 p-1 flex items-center justify-center">
-                <img src="/logo.svg" alt="JobPilot AI" width={1044} height={1044} />
-              </span>
-              <span className="flex flex-col leading-tight">
-                <span className="heading text-lg md:text-xl font-extrabold text-gray-900">
-                  JobPilot <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-teal-600">AI</span>
-                </span>
-                <span className="text-[10px] md:text-xs text-gray-500">Build · Tailor · Apply — on autopilot</span>
-              </span>
-            </Link>
-
-            <nav className="hidden md:flex items-center gap-6">
-              <Link href="/#features" className="text-gray-600 hover:text-gray-900 transition-colors">Features</Link>
-              <Link href="/#how-it-works" className="text-gray-600 hover:text-gray-900 transition-colors">How it Works</Link>
-              <Link href="/jobs" className="text-gray-600 hover:text-gray-900 transition-colors">Find Jobs</Link>
-              <Link href="/jdBuilder" className="text-gray-600 hover:text-gray-900 transition-colors">Resume Builder</Link>
-            </nav>
-
-            <div className="flex items-center">
-              <Link href="/jdBuilder" className="px-5 py-2 rounded-lg text-white font-semibold bg-gradient-to-r from-blue-600 to-teal-600 shadow-[0_10px_24px_rgba(59,130,246,0.25)] hover:shadow-[0_14px_30px_rgba(59,130,246,0.35)] hover:translate-y-[-1px] active:translate-y-[0px] transition-all">
-                Build Resume
-              </Link>
-            </div>
-          </div>
-        </div>
-      </header>
-      {/* Explicit spacer to ensure separation below sticky header */}
-      <div className="h-12 md:h-16"></div>
-
-      <div className="container-page mt-16 md:mt-20 py-10 space-y-8">
-        {/* Compact filter chips when results visible */}
-        {hasJobs && compactMode && (
-          <div className="transition-all duration-700 ease-in-out">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg font-semibold text-gray-900">Filters</h3>
-              <button
-                type="button"
-                onClick={() => setCompactMode(false)}
-                className="text-sm text-teal-600 hover:text-teal-700 underline"
-              >
-                Edit
-              </button>
-            </div>
-            {/* Pills row matching reference layout */}
-            <div className="flex flex-wrap gap-2">
-              {/* Highlighted: Keywords */}
-              {searchData.keywords && (
-                <span className="px-4 py-1.5 rounded-full text-sm border bg-gradient-to-r from-blue-600 to-teal-500 text-white border-transparent">
-                  {searchData.keywords}
-                </span>
-              )}
-              {/* Neutral skills */}
-              {searchData.skills && searchData.skills.split(',').map((raw, i) => {
-                const s = raw.trim();
-                return (
-                  <span key={`${s}-${i}`} className={`px-4 py-1.5 rounded-full text-sm border bg-white text-gray-700 border-gray-300`}>
-                    {s}
-                  </span>
-                );
-              })}
-              {/* Highlighted: Where */}
-              {searchData.where && (
-                <span className="px-4 py-1.5 rounded-full text-sm border bg-gradient-to-r from-blue-600 to-teal-500 text-white border-transparent">
-                  {searchData.where === 'remote' ? 'Remote' : searchData.where}
-                </span>
-              )}
-              {/* Highlighted: Location */}
-              {searchData.location && (
-                <span className="px-4 py-1.5 rounded-full text-sm border bg-gradient-to-r from-blue-600 to-teal-500 text-white border-transparent">
-                  {searchData.location}
-                </span>
-              )}
-            </div>
-          </div>
-        )}
-
-        {/* Search Form */}
-        {!(hasJobs && compactMode) && (
-        <div className="card anim-card p-6 md:p-8 transition-all duration-500 ease-in-out">
-        <div className="flex justify-between items-center mb-6">
-          <h2 className="text-2xl font-bold text-gray-900 flex items-center">
-            <Search className="mr-2 h-6 w-6 text-blue-600" />
-            Find Your Dream Job
-          </h2>
+      <div className={`container-page ${likedJobs.length > 0 ? 'max-w-[800px]' : 'max-w-[1200px]'} mx-auto mt-16 md:mt-20 py-10 space-y-8 md:space-y-0 md:grid md:grid-cols-12 md:gap-8`}>
+        <div className={likedJobs.length > 0 ? "md:col-span-9" : "md:col-span-12"}>
+          <div className="shadow-lg rounded-xl bg-white px-8 py-8">
           {isPrefilled && resumeData && (
-            <div className="flex items-center space-x-2">
-              <div className="flex items-center text-sm text-teal-700 bg-teal-50 px-3 py-1 rounded-full">
+              <div className="flex items-center space-x-2 mb-4">
+                <div className="flex items-center text-sm text-green-700 bg-green-50 px-3 py-1 rounded-full">
                 <User className="h-4 w-4 mr-1" />
                 Pre-filled from resume
-              </div>
-              <button
-                type="button"
-                onClick={() => {
-                  setSearchData({
-                    keywords: '',
-                    location: '',
-                    skills: '',
-                    experience_level: '',
-                    where: '',
-                    max_results: 50,
-                    sources: ['indeed', 'remoteok', 'adzuna', 'jooble', 'naukri', 'linkedin']
-                  });
-                  setIsPrefilled(false);
-                }}
-                className="text-sm text-gray-500 hover:text-gray-700 underline"
-              >
-                Clear
-              </button>
-            </div>
-          )}
-        </div>
-        
-        {!resumeData && !resumeLoading && (
-          <div className="mb-4 p-4 bg-blue-50 border border-blue-200 rounded-md">
-            <div className="flex items-start">
-              <Briefcase className="h-5 w-5 text-blue-600 mt-0.5 mr-3 flex-shrink-0" />
-              <div>
-                <h3 className="text-sm font-medium text-blue-800">Pro Tip</h3>
-                <p className="text-sm text-blue-700 mt-1">
-                  Create your resume first to automatically pre-fill job search fields with your skills, experience, and location.
-                </p>
-                <Link
-                  href="/"
-                  className="text-sm text-blue-600 hover:text-blue-800 underline mt-1 inline-block"
-                >
-                  Go to Resume Builder →
-                </Link>
-              </div>
             </div>
           </div>
         )}
-
         <form onSubmit={handleSearch} className="space-y-6">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             <div>
@@ -414,13 +608,12 @@ export default function JobSearch({ onJobSelect, className = '' }: JobSearchProp
                 type="text"
                 id="keywords"
                 value={searchData.keywords}
-                onChange={(e) => setSearchData(prev => ({ ...prev, keywords: e.target.value }))}
+                    onChange={e => setSearchData(prev => ({ ...prev, keywords: e.target.value }))}
                 placeholder="e.g., Software Engineer, Developer"
                 className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
                 required
               />
             </div>
-            
             <div>
               <label htmlFor="location" className="block text-sm font-medium text-gray-700 mb-1">
                 Location
@@ -429,7 +622,7 @@ export default function JobSearch({ onJobSelect, className = '' }: JobSearchProp
                 type="text"
                 id="location"
                 value={searchData.location}
-                onChange={(e) => setSearchData(prev => ({ ...prev, location: e.target.value }))}
+                    onChange={e => setSearchData(prev => ({ ...prev, location: e.target.value }))}
                 placeholder="e.g., Mumbai, Remote"
                 className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
                 required
@@ -442,617 +635,296 @@ export default function JobSearch({ onJobSelect, className = '' }: JobSearchProp
               <select
                 id="where"
                 value={searchData.where}
-                onChange={(e) => setSearchData(prev => ({ ...prev, where: e.target.value }))}
-                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-              >
+                    onChange={e => setSearchData(prev => ({ ...prev, where: e.target.value }))}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
                 <option value="">Any</option>
                 <option value="remote">Remote</option>
               </select>
             </div>
-          </div>
-
           <div>
             <label htmlFor="skills" className="block text-sm font-medium text-gray-700 mb-1">
-              Your Skills (comma-separated)
+                    Your Skills
             </label>
-            <textarea
+                  <input
+                    type="text"
               id="skills"
               value={searchData.skills}
-              onChange={(e) => setSearchData(prev => ({ ...prev, skills: e.target.value }))}
+                    onChange={e => setSearchData(prev => ({ ...prev, skills: e.target.value }))}
               placeholder="e.g., Python, React, AWS, Machine Learning"
-              rows={3}
               className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-              required
             />
           </div>
-
-          <div className="grid grid-cols-1 gap-6">
             <div>
-              <label htmlFor="experience" className="block text-sm font-medium text-gray-700 mb-1">
+                  <label htmlFor="experience_level" className="block text-sm font-medium text-gray-700 mb-1">
                 Experience Level
               </label>
               <select
-                id="experience"
+                    id="experience_level"
                 value={searchData.experience_level}
-                onChange={(e) => setSearchData(prev => ({ ...prev, experience_level: e.target.value }))}
-                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-              >
+                    onChange={e => setSearchData(prev => ({ ...prev, experience_level: e.target.value }))}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
                 <option value="">Any Level</option>
-                <option value="entry">Entry Level (0-2 years)</option>
-                <option value="mid">Mid Level (2-5 years)</option>
-                <option value="senior">Senior Level (5+ years)</option>
-                <option value="leadership">Leadership (9+ years)</option>
+                    <option value="entry">Entry</option>
+                    <option value="mid">Mid</option>
+                    <option value="senior">Senior</option>
+                    <option value="leadership">Leadership</option>
               </select>
             </div>
           </div>
-
-          {/* Sources UI removed by request; still included in payload */}
-
-          <button
-            type="submit"
-            disabled={loading}
-            className="w-full px-5 py-2 rounded-lg text-white font-medium bg-gradient-to-r from-blue-600 to-teal-600 shadow hover:shadow-md hover:scale-[1.02] active:scale-[0.99] transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center"
-          >
-            {loading ? (
-              <>
-                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
-                Searching...
-              </>
-            ) : (
-              <>
-                <Search className="mr-2 h-4 w-4" />
-                Search Jobs
-              </>
-            )}
-          </button>
-          <div className="flex items-center justify-end pt-2">
-            {hasJobs && (
               <button
-                type="button"
-                onClick={() => setCompactMode(true)}
-                className="text-sm text-teal-600 hover:text-teal-700 underline"
+                type="submit"
+                className="w-full px-5 py-2 rounded-lg text-white font-medium bg-gradient-to-r from-blue-600 to-teal-600"
+                disabled={loading}
               >
-                Collapse filters
+                {loading ? 'Searching...' : 'Search Jobs'}
               </button>
+            </form>
+            {error && (
+              <div className="bg-red-50 border border-red-200 rounded-md p-4 text-red-700 mt-4">
+                {error}
+              </div>
             )}
+            {results && Array.isArray(results.jobs) && results.jobs.length > 0 && (
+              <div className="mt-8 space-y-4">
+                {results.jobs
+                  .filter(job => !hiddenJobIds.includes(job.id))
+                  .map(job => (
+                    <div key={job.id} className="p-4 mb-3 border rounded-xl shadow-md flex flex-col md:flex-row md:justify-between md:items-center bg-white">
+                      <div className="md:max-w-[70%]">
+                        <div className="font-bold text-lg">{job.title}</div>
+                        <div className="text-gray-700">{job.company}, {job.location}</div>
+                        <div className="text-gray-500 text-sm">{job.source} | {job.match_score && (Math.round(job.match_score * 100) + '% match')}</div>
+                        {job.description && (
+                          <p className="text-gray-600 text-sm mt-2">
+                            {(() => {
+                              // Strip HTML and get plain text for card preview
+                              const plainText = stripHtmlToPlainText(job.description);
+                              return plainText.length > 220 ? plainText.slice(0, 220) + '…' : plainText;
+                            })()}
+                          </p>
+                        )}
+                      </div>
+                      <div className="flex gap-2 mt-2 md:mt-0">
+                        <button
+                          type="button"
+                          className="px-4 py-2 rounded bg-gray-50 hover:bg-gray-100 border border-gray-200 text-gray-700 shadow"
+                          onClick={() => { 
+                            // Open modal immediately, save in background
+                            onJobSelect && onJobSelect(job);
+                            // Don't await - let it save in background
+                            handleLikeJob(job).catch(err => {
+                              console.error('Background save failed (non-critical):', err);
+                            });
+                          }}
+                        >Read More</button>
+                        <button
+                          type="button"
+                          className="px-4 py-2 rounded bg-gradient-to-r from-emerald-600 to-teal-600 text-white shadow"
+                          onClick={() => handleQuickLink(job)}
+                        >Quick Link</button>
+                      </div>
           </div>
-        </form>
+                  ))}
+                
+                {/* Pagination Controls */}
+                {results.pagination && (
+                  <div className="mt-8 flex items-center justify-between border-t pt-6">
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (results.pagination?.has_previous_page) {
+                            setCurrentPage(prev => Math.max(1, prev - 1));
+                          }
+                        }}
+                        disabled={!results.pagination?.has_previous_page || paginationLoading}
+                        className={`px-4 py-2 rounded-md text-sm font-medium ${
+                          results.pagination?.has_previous_page && !paginationLoading
+                            ? 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                            : 'bg-gray-50 text-gray-400 cursor-not-allowed'
+                        }`}
+                      >
+                        Previous
+                      </button>
+                      <span className="text-sm text-gray-600">
+                        Page {results.pagination.page} of {results.pagination.total_pages || 1}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (results.pagination?.has_next_page) {
+                            setCurrentPage(prev => prev + 1);
+                          }
+                        }}
+                        disabled={!results.pagination?.has_next_page || paginationLoading}
+                        className={`px-4 py-2 rounded-md text-sm font-medium ${
+                          results.pagination?.has_next_page && !paginationLoading
+                            ? 'bg-blue-600 text-white hover:bg-blue-700'
+                            : 'bg-gray-50 text-gray-400 cursor-not-allowed'
+                        }`}
+                      >
+                        Next
+                      </button>
+                    </div>
+                    {paginationLoading && (
+                      <div className="text-sm text-gray-500 flex items-center gap-2">
+                        <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-600"></div>
+                        Loading...
+                      </div>
+                    )}
+                  </div>
+                )}
       </div>
         )}
-
-      {/* Error Display */}
-      {error && (
-        <div className="bg-red-50 border border-red-200 rounded-md p-4">
-          <div className="flex">
-            <div className="ml-3">
-              <h3 className="text-sm font-medium text-red-800">Search Error</h3>
-              <div className="mt-2 text-sm text-red-700">{error}</div>
-            </div>
           </div>
         </div>
+        {likedJobs.length > 0 && (
+          <div className="hidden md:block md:col-span-3 pt-2">
+            <JobsYouLiked jobs={likedJobs} onJobSelect={onJobSelect} />
+        </div>
       )}
-
-      {/* Results */}
-      {results && (
-        <div className="space-y-6">
-          {/* Statistics */}
-          {results.statistics && (
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-              <div className="card anim-card p-5 text-center">
-                <div className="text-sm text-gray-600 mb-1">Total Jobs</div>
-                <div className="text-2xl font-bold text-purple-600">{results.estimated_total || results.total_found}</div>
               </div>
-              <div className="card anim-card p-5 text-center">
-                <div className="text-sm text-gray-600 mb-1">Avg Match Score</div>
-                <div className="text-2xl font-bold text-green-600">
-                  {formatMatchScore(results.statistics.average_match_score)}
-                </div>
+      {/* Recruiter Modal - Full functionality like RecruiterOutreachButton */}
+      {recruitersOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => setRecruitersOpen(false)}>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl mx-4 max-h-[90vh] overflow-hidden flex flex-col" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between border-b px-6 py-4">
+              <div>
+                <h3 className="text-xl font-bold text-gray-900">Recruiters for {selectedJob?.title}</h3>
+                <p className="text-sm text-gray-500 mt-1">{selectedJob?.company}{selectedJob?.location ? ` — ${selectedJob.location}` : ''}</p>
               </div>
-              <div className="card anim-card p-5 text-center">
-                <div className="text-sm text-gray-600 mb-1">Sources Searched</div>
-                <div className="text-2xl font-bold text-purple-600">{results.sources_searched.length}</div>
-              </div>
-              <div className="card anim-card p-5 text-center">
-                <div className="text-sm text-gray-600 mb-1">Jobs Displayed</div>
-                <div className="text-2xl font-bold text-blue-600">
-                  {(() => {
-                    const deduplicatedJobs = deduplicateJobs(results.jobs);
-                    const filteredJobs = deduplicatedJobs
-                      .filter((job) => {
-                        const threshold = minMatchFilter === '100' ? 1.0 : minMatchFilter === '80' ? 0.8 : minMatchFilter === '60' ? 0.6 : 0.0;
-                        return (job.match_score ?? 0) >= threshold;
-                      });
-                    return filteredJobs.length;
-                  })()}
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Sort + Quick Filters */}
-          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2">
-            <div className="flex items-center gap-2">
-              {[
-                { key: 'all', label: 'All' },
-                { key: '60', label: '60%+' },
-                { key: '80', label: '80%+' },
-                { key: '100', label: '100%' }
-              ].map(({ key, label }) => (
                 <button
-                  key={key}
-                  type="button"
-                  onClick={() => setMinMatchFilter(key as any)}
-                  className={`px-3 py-1 rounded-full text-xs border ${minMatchFilter === key ? 'bg-gradient-to-r from-blue-600 to-teal-500 text-white border-transparent' : 'bg-white text-gray-700 border-gray-300'} `}
-                >
-                  {label}
-                </button>
-              ))}
+                className="px-3 py-1 rounded bg-gray-100 hover:bg-gray-200 text-gray-700 text-sm"
+                onClick={() => setRecruitersOpen(false)}
+              >Close</button>
             </div>
-            <div className="flex items-center justify-end">
-              <label htmlFor="sort" className="mr-2 text-sm text-gray-600">Sort by</label>
-              <select
-                id="sort"
-                value={sortOption}
-                onChange={(e) => setSortOption(e.target.value as any)}
-                className="px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-              >
-                <option value="match_desc">Best match (coverage %)</option>
-                <option value="match_asc">Match (low to high)</option>
-                <option value="matched_skills_desc">Most matched skills</option>
-                <option value="requirements_asc">Fewest requirements</option>
-                <option value="source_priority">Source priority</option>
-              </select>
-            </div>
-          </div>
-
-          {/* Job Listings */}
-          <div className="space-y-3">
-            {(() => {
-              // First deduplicate all jobs to prevent React key conflicts
-              const deduplicatedJobs = deduplicateJobs(results.jobs);
-              
-              const filteredJobs = deduplicatedJobs
-              .filter((job) => {
-                const threshold = minMatchFilter === '100' ? 1.0 : minMatchFilter === '80' ? 0.8 : minMatchFilter === '60' ? 0.6 : 0.0;
-                  const passes = (job.match_score ?? 0) >= threshold;
-                  // Debug logging
-                  if (!passes) {
-                    console.log(`Job "${job.title}" filtered out: match_score=${job.match_score}, threshold=${threshold}`);
-                  }
-                  return passes;
-              })
-              .sort((a, b) => {
-                const sourceRank = (s: string) => {
-                    const order = ['linkedin', 'naukri', 'instahyre', 'remoteok', 'remotejobs', 'foundit', 'monster', 'hrist', 'flexjobs', 'adzuna', 'jooble', 'google'];
-                  const idx = order.indexOf((s || '').toLowerCase());
-                  return idx === -1 ? Number.MAX_SAFE_INTEGER : idx;
-                };
-                switch (sortOption) {
-                  case 'match_asc':
-                    return (a.match_score ?? 0) - (b.match_score ?? 0);
-                  case 'matched_skills_desc':
-                    return (b.skills_matched?.length ?? 0) - (a.skills_matched?.length ?? 0);
-                  case 'requirements_asc':
-                    return (a.skills_required?.length ?? 0) - (b.skills_required?.length ?? 0);
-                  case 'source_priority':
-                    return sourceRank(a.source) - sourceRank(b.source);
-                  case 'match_desc':
-                  default:
-                    return (b.match_score ?? 0) - (a.match_score ?? 0);
-                }
-                });
-              
-              // Debug logging
-              console.log(`========================================`);
-              console.log(`[Frontend] Total jobs from backend: ${results.jobs.length}`);
-              console.log(`[Frontend] Deduplicated jobs: ${deduplicatedJobs.length}`);
-              console.log(`[Frontend] Filtered jobs (filter: ${minMatchFilter}): ${filteredJobs.length}`);
-              console.log(`[Frontend] Current page: ${currentPage}`);
-              console.log(`[Frontend] Page size: ${pageSize}`);
-              console.log(`[Frontend] Results pagination:`, results.pagination);
-              console.log(`========================================`);
-              
-              return filteredJobs.map((job) => (
-              <div
-                key={job.id}
-                className="card card-hover anim-inward rounded-2xl p-6 md:p-7 border-emerald-100 cursor-pointer"
-                onClick={() => onJobSelect?.(job)}
-                onMouseMove={handleCardMouseMove}
-                onMouseLeave={handleCardMouseLeave}
-              >
-                <div className="flex justify-between items-start mb-5">
-                  <div className="flex-1 pr-4">
-                    <h3 className="text-2xl font-semibold text-slate-900 mb-2">{job.title}</h3>
-                    <div className="flex flex-wrap items-center gap-2 text-gray-600 mb-2">
-                      <span className="px-3 py-1 rounded-full text-xs bg-gray-100 border border-gray-200 flex items-center">
-                        <Building className="h-3.5 w-3.5 mr-1" />
-                        <span className="font-medium">{job.company}</span>
-                      </span>
-                      {job.location && (
-                        <span className="flex items-center text-gray-600 text-xs">
-                          <MapPin className="h-3.5 w-3.5 mr-1" />
-                          {job.location}
-                        </span>
-                      )}
-                      {/* Remote chip removed: only show explicit remote text if part of location/title from backend */}
-                      {job.salary && (
-                        <span className="px-3 py-1 rounded-full text-xs bg-gray-100 border border-gray-200 flex items-center">
-                          <DollarSign className="h-3.5 w-3.5 mr-1" />
-                          {job.salary}
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <div className="flex flex-col gap-1">
-                    <span className="px-3 py-1 rounded-full text-sm font-semibold bg-emerald-100 text-emerald-700">
-                        {formatMatchScore(job.match_score)} overall match
-                    </span>
-                      <div className="flex gap-2 text-xs">
-                        <span className="px-2 py-1 rounded bg-blue-100 text-blue-700">
-                          Profile: {formatMatchScore(job.profile_score || 0)}
-                        </span>
-                        <span className="px-2 py-1 rounded bg-purple-100 text-purple-700">
-                          Skills: {formatMatchScore(job.skill_score || 0)}
-                    </span>
-                      </div>
-                    </div>
-                    <button
-                      type="button"
-                      className="px-4 py-2 rounded-full bg-white text-gray-700 border border-gray-200 shadow-sm flex items-center gap-2"
-                      onClick={(e) => e.stopPropagation()}
-                    >
-                      <Star className="h-4 w-4" /> Save
-                    </button>
-                  </div>
+            <div className="flex-1 overflow-y-auto px-6 py-4">
+              {recruitersLoading && (
+                <div className="py-12 text-center text-gray-600">
+                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto mb-4"></div>
+                  <p>Finding recruiter contacts…</p>
                 </div>
-
-                <div className="mb-4">
-                  <p className="text-gray-700 text-sm leading-relaxed">
-                    {job.description.substring(0, 200)}
-                    {job.description.length > 200 && '...'}
+              )}
+              {recruitersError && (
+                <div className="py-4 bg-red-50 border border-red-200 text-red-700 rounded-lg px-4 mb-4">{recruitersError}</div>
+              )}
+              {!recruitersLoading && !recruitersError && recruiters.length === 0 && (
+                <div className="border rounded-lg p-4 bg-gray-50 border-gray-200">
+                  <h3 className="font-semibold text-gray-900 mb-2">🔍 No Recruiter Contacts Found</h3>
+                  <p className="text-gray-700 text-sm mb-3">
+                    We couldn't find any recruiter contacts for <strong>{selectedJob?.company}</strong>. This could be because:
                   </p>
+                  <ul className="text-gray-700 text-sm space-y-1 mb-3">
+                    <li>• The company doesn't have public recruiter information</li>
+                    <li>• The company uses different job titles for recruiters</li>
+                    <li>• The company's domain information isn't available</li>
+                  </ul>
                 </div>
-
-                {job.skills_required.length > 0 && (
-                  <div className="mb-4">
-                    <h4 className="text-sm font-medium text-gray-900 mb-2">Required Skills</h4>
-                    <div className="flex flex-wrap gap-2">
-                      {job.skills_required.slice(0, 8).map((skill, index) => (
-                        <span
-                          key={index}
-                          className="px-3 py-1 rounded-full text-xs bg-gray-100 text-gray-700 border border-gray-200"
-                        >
-                          {skill}
-                        </span>
-                      ))}
-                      {job.skills_required.length > 8 && (
-                        <span className="px-2 py-1 rounded text-xs bg-gray-100 text-gray-500">
-                          +{job.skills_required.length - 8} more
-                        </span>
-                      )}
+              )}
+              {!recruitersLoading && !recruitersError && recruiters.length > 0 && (
+                <div className="space-y-4">
+                  {recruiters.map((r: any, idx: number) => {
+                    // Check if this is a domain not found result
+                    if (r.contact?.source === 'domain-not-found') {
+                      return (
+                        <div key={idx} className="border rounded-lg p-4 bg-yellow-50 border-yellow-200">
+                          <h3 className="font-semibold text-yellow-900 mb-2">⚠️ Company Domain Not Found</h3>
+                          <p className="text-yellow-800 text-sm mb-3">
+                            We couldn't find a domain for <strong>{selectedJob?.company}</strong>.
+                          </p>
+                        </div>
+                      );
+                    }
+                    
+                    // Regular contact display
+                    return (
+                      <div key={idx} className="border rounded-lg p-4 bg-white shadow-sm">
+                        <div className="flex justify-between items-start mb-2">
+                          <div className="text-sm text-gray-800">
+                            <span className="font-semibold">{r.contact?.name || 'Recruiter'}</span>
+                          </div>
+                          <div className="text-xs text-gray-500">
+                            {r.contact?.confidence ? `${Math.round(r.contact.confidence * 100)}%` : ''}
                     </div>
+                        </div>
+                        <div className="text-sm text-gray-600 mb-2">
+                          {r.contact?.title} @ {r.contact?.company}
+                        </div>
+                        <div className="text-xs text-gray-500 mb-3">
+                          Source: {r.contact?.source}
+                        </div>
+                        {r.contact?.linkedinUrl && (
+                          <div className="text-xs text-blue-700 mb-3">
+                            <a href={r.contact.linkedinUrl} target="_blank" rel="noreferrer" className="underline">LinkedIn Profile</a>
+                          </div>
+                        )}
+                        <div className="flex gap-2 flex-wrap mb-3">
+                          {r.mailto ? (
+                            <button 
+                              onClick={() => handleOpenGmail(r.mailto)}
+                              className="px-3 py-1.5 rounded bg-green-600 text-white text-sm hover:bg-green-700"
+                            >
+                              {gmailAuthenticated ? 'Open Gmail' : 'Authenticate Gmail'}
+                            </button>
+                          ) : (
+                            <div className="px-3 py-1.5 rounded bg-gray-400 text-white text-sm cursor-not-allowed" title="Email addresses not available">
+                              Email Not Available
                   </div>
                 )}
-
-                <div className="mt-6 flex items-center gap-3">
-                  <a
-                    href={job.url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="px-5 py-2 rounded-lg text-white font-semibold bg-gradient-to-r from-blue-600 to-teal-500 shadow hover:shadow-md hover:translate-y-[-1px] active:translate-y-[0px] transition-all"
-                    onClick={(e) => e.stopPropagation()}
-                  >
-                    Quick Apply
-                  </a>
+                          {!gmailAuthenticated && (
+                            <button 
+                              onClick={handleGmailAuth}
+                              className="px-3 py-1.5 rounded bg-blue-600 text-white text-sm hover:bg-blue-700"
+                            >
+                              Connect Gmail
+                            </button>
+                          )}
+                          {gmailAuthenticated && (
+                            <div className="px-3 py-1.5 rounded bg-green-100 text-green-700 text-sm">
+                              ✅ Gmail Connected
+                            </div>
+                          )}
+                          {r.contact?.linkedinUrl && (
                   <button
-                    type="button"
-                    className="px-5 py-2 rounded-lg border border-gray-300 text-gray-700 bg-white hover:bg-gray-50 transition-colors"
-                    onClick={(e) => { e.stopPropagation(); onJobSelect?.(job); }}
+                              onClick={() => handleLinkedInOpen(r.contact, r.templates)}
+                              className="px-3 py-1.5 rounded bg-blue-600 text-white text-sm hover:bg-blue-700"
                   >
-                    Read more
+                              LinkedIn (Open Profile)
                   </button>
+                          )}
+                        </div>
+                        <details className="mt-2">
+                          <summary className="text-sm cursor-pointer text-gray-600 hover:text-gray-800">► Preview Messages</summary>
+                          <div className="mt-3 space-y-3">
+                            {r.templates?.subject && (
+                              <div>
+                                <div className="text-xs text-gray-500 mb-1">Subject</div>
+                                <div className="text-sm font-medium bg-gray-50 p-2 rounded">{r.templates.subject}</div>
+                              </div>
+                            )}
+                            {r.templates?.emailBody && (
+                              <div>
+                                <div className="text-xs text-gray-500 mb-1">Email Body</div>
+                                <pre className="whitespace-pre-wrap text-sm bg-gray-50 p-2 rounded text-gray-700">{r.templates.emailBody}</pre>
+                              </div>
+                            )}
+                            {r.templates?.linkedinMessage && (
+                              <div>
+                                <div className="text-xs text-gray-500 mb-1">LinkedIn Message</div>
+                                <pre className="whitespace-pre-wrap text-sm bg-gray-50 p-2 rounded text-gray-700">{r.templates.linkedinMessage}</pre>
+                              </div>
+                            )}
+                          </div>
+                        </details>
+                      </div>
+                    );
+                  })}
                 </div>
+              )}
               </div>
-            ));
-            })()}
           </div>
-
-          {/* Pagination Controls */}
-          {results.pagination && (results.pagination.total_pages > 1 || currentPage > 1) && (
-            <div className="flex items-center justify-between mt-8 px-6 py-4 bg-white rounded-lg border border-gray-200">
-              <div className="flex items-center gap-4">
-                <span className="text-sm text-gray-600">
-                  {(() => {
-                    const deduplicatedJobs = deduplicateJobs(results.jobs);
-                    const filteredJobs = deduplicatedJobs
-                      .filter((job) => {
-                        const threshold = minMatchFilter === '100' ? 1.0 : minMatchFilter === '80' ? 0.8 : minMatchFilter === '60' ? 0.6 : 0.0;
-                        return (job.match_score ?? 0) >= threshold;
-                      });
-                    const startIdx = (currentPage - 1) * results.pagination.page_size + 1;
-                    const endIdx = filteredJobs.length > 0 ? startIdx + filteredJobs.length - 1 : startIdx - 1;
-                    const totalJobs = results.estimated_total || results.total_found;
-                    if (filteredJobs.length === 0) {
-                      return `Showing ${startIdx} to ${startIdx - 1} of ${totalJobs}+ jobs (no matches)`;
-                    }
-                    return `Showing ${startIdx} to ${endIdx} of ${totalJobs}+ jobs`;
-                  })()}
-                </span>
-                {(results as any).cached && (
-                  <span className="px-2 py-1 bg-green-100 text-green-700 text-xs rounded-full">
-                    ⚡ Cached
-                  </span>
-                )}
-              </div>
-              
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => {
-                    if (results.pagination?.has_previous_page) {
-                      setCurrentPage(currentPage - 1);
-                      window.scrollTo({ top: 0, behavior: 'smooth' });
-                    } else {
-                      alert('You are already on the first page');
-                    }
-                  }}
-                  disabled={!results.pagination.has_previous_page}
-                  className="px-3 py-1 text-sm border border-gray-300 rounded disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50"
-                >
-                  Previous
-                </button>
-                
-                <span className="px-3 py-1 text-sm bg-blue-600 text-white rounded">
-                  Page {currentPage} of {results.pagination.total_pages}
-                </span>
-                
-                <button
-                  onClick={async () => {
-                    if (results.pagination?.has_next_page) {
-                      // If we have cached data for the next page, just navigate
-                      setCurrentPage(currentPage + 1);
-                      window.scrollTo({ top: 0, behavior: 'smooth' });
-                    } else {
-                      // If no cached data, fetch more jobs
-                      setPaginationLoading(true);
-                      try {
-                        // Normalize location for pagination
-                        const normalizedLocation = (searchData.where && searchData.where.toLowerCase() !== 'remote' && searchData.where.toLowerCase() !== 'any') 
-                          ? searchData.where 
-                          : '';
-
-                        const response = await fetch('/api/jobs/search', {
-                          method: 'POST',
-                          headers: { 'Content-Type': 'application/json' },
-                          body: JSON.stringify({
-                            keywords: searchData.keywords.split(',').map(k => k.trim()).filter(k => k),
-                            location: normalizedLocation,
-                            skills: searchData.skills.split(',').map(s => s.trim()).filter(s => s),
-                            where: searchData.where || undefined,
-                            experience_level: searchData.experience_level || undefined,
-                            max_results: searchData.max_results,
-                            sources: searchData.sources,
-                            page: currentPage + 1,
-                            page_size: pageSize
-                          })
-                        });
-                        
-                        if (!response.ok) {
-                          throw new Error('Failed to fetch more jobs');
-                        }
-                        
-                        const newResults = await response.json();
-                        
-                        // Deduplicate new results before processing
-                        if (newResults.jobs && Array.isArray(newResults.jobs)) {
-                          newResults.jobs = deduplicateJobs(newResults.jobs);
-                        }
-                        
-                        // Check if we actually got new jobs
-                        if (newResults.jobs && newResults.jobs.length > 0) {
-                          // Merge new results with existing ones, removing duplicates
-                          if (results && newResults.jobs) {
-                            // Create a map of existing job IDs for quick lookup
-                            const existingJobIds = new Set(results.jobs.map((job: JobPosting) => job.id));
-                            
-                            // Filter out duplicate jobs from new results
-                            const uniqueNewJobs = newResults.jobs.filter((job: JobPosting) => !existingJobIds.has(job.id));
-                            
-                            console.log(`Fetched ${newResults.jobs.length} jobs, ${uniqueNewJobs.length} unique new jobs (${newResults.jobs.length - uniqueNewJobs.length} duplicates removed)`);
-                            
-                            if (uniqueNewJobs.length > 0) {
-                              const allJobs = [...results.jobs, ...uniqueNewJobs];
-                              const deduplicatedJobs = deduplicateJobs(allJobs);
-                              
-                              const updatedResults = {
-                                ...newResults,
-                                jobs: deduplicatedJobs,
-                                total_found: Math.max(results.total_found, newResults.total_found),
-                                estimated_total: Math.max(results.estimated_total || 0, newResults.estimated_total || 0)
-                              };
-                              setResults(updatedResults);
-                            } else {
-                              // All new jobs were duplicates, no more unique jobs available
-                              alert('No more jobs available. You have reached the last page.');
-                              return;
-                            }
-                          } else {
-                            setResults(newResults);
-                          }
-                          
-                          setCurrentPage(currentPage + 1);
-                          window.scrollTo({ top: 0, behavior: 'smooth' });
-                        } else {
-                          // No more jobs available
-                          alert('No more jobs available. You have reached the last page.');
-                        }
-                      } catch (err) {
-                        console.error('Error fetching more jobs:', err);
-                        alert('Failed to load more jobs. Please try again.');
-                      } finally {
-                        setPaginationLoading(false);
-                      }
-                    }
-                  }}
-                  disabled={paginationLoading || !results.pagination?.has_next_page}
-                  className="px-3 py-1 text-sm border border-gray-300 rounded disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50 flex items-center gap-2"
-                >
-                  {paginationLoading ? (
-                    <>
-                      <div className="animate-spin h-4 w-4 border-2 border-gray-300 border-t-blue-600 rounded-full"></div>
-                      Loading...
-                    </>
-                  ) : (
-                    'Next'
-                  )}
-                </button>
-              </div>
-            </div>
-          )}
-
-          {/* Load More Button */}
-          {results.pagination && results.pagination.has_next_page && (
-            <div className="text-center mt-6">
-              <button
-                onClick={async () => {
-                  if (results.pagination?.has_next_page) {
-                    // If we have cached data for the next page, just navigate
-                    setCurrentPage(currentPage + 1);
-                    window.scrollTo({ top: 0, behavior: 'smooth' });
-                  } else {
-                    // If no cached data, fetch more jobs
-                    setPaginationLoading(true);
-                    try {
-                      // Normalize location for Load More
-                      const normalizedLocation = (searchData.where && searchData.where.toLowerCase() !== 'remote' && searchData.where.toLowerCase() !== 'any') 
-                        ? searchData.where 
-                        : '';
-
-                      const response = await fetch('/api/jobs/search', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                          keywords: searchData.keywords.split(',').map(k => k.trim()).filter(k => k),
-                          location: normalizedLocation,
-                          skills: searchData.skills.split(',').map(s => s.trim()).filter(s => s),
-                          where: searchData.where || undefined,
-                          experience_level: searchData.experience_level || undefined,
-                          max_results: searchData.max_results,
-                          sources: searchData.sources,
-                          page: currentPage + 1,
-                          page_size: pageSize
-                        })
-                      });
-                      
-                      if (!response.ok) {
-                        throw new Error('Failed to fetch more jobs');
-                      }
-                      
-                      const newResults = await response.json();
-                      
-                      // Deduplicate new results before processing
-                      if (newResults.jobs && Array.isArray(newResults.jobs)) {
-                        newResults.jobs = deduplicateJobs(newResults.jobs);
-                      }
-                      
-                      // Check if we actually got new jobs
-                      if (newResults.jobs && newResults.jobs.length > 0) {
-                        // Merge new results with existing ones, removing duplicates
-                        if (results && newResults.jobs) {
-                          // Create a map of existing job IDs for quick lookup
-                          const existingJobIds = new Set(results.jobs.map((job: JobPosting) => job.id));
-                          
-                          // Filter out duplicate jobs from new results
-                          const uniqueNewJobs = newResults.jobs.filter((job: JobPosting) => !existingJobIds.has(job.id));
-                          
-                          console.log(`Load More: Fetched ${newResults.jobs.length} jobs, ${uniqueNewJobs.length} unique new jobs (${newResults.jobs.length - uniqueNewJobs.length} duplicates removed)`);
-                          
-                          if (uniqueNewJobs.length > 0) {
-                            const allJobs = [...results.jobs, ...uniqueNewJobs];
-                            const deduplicatedJobs = deduplicateJobs(allJobs);
-                            
-                            const updatedResults = {
-                              ...newResults,
-                              jobs: deduplicatedJobs,
-                              total_found: Math.max(results.total_found, newResults.total_found),
-                              estimated_total: Math.max(results.estimated_total || 0, newResults.estimated_total || 0)
-                            };
-                            setResults(updatedResults);
-                          } else {
-                            // All new jobs were duplicates, no more unique jobs available
-                            alert('No more jobs available. You have reached the last page.');
-                            return;
-                          }
-                        } else {
-                          setResults(newResults);
-                        }
-                        
-                        setCurrentPage(currentPage + 1);
-                        window.scrollTo({ top: 0, behavior: 'smooth' });
-                      } else {
-                        // No more jobs available
-                        alert('No more jobs available. You have reached the last page.');
-                      }
-                    } catch (err) {
-                      console.error('Error fetching more jobs:', err);
-                      alert('Failed to load more jobs. Please try again.');
-                    } finally {
-                      setPaginationLoading(false);
-                    }
-                  }
-                }}
-                disabled={paginationLoading}
-                className="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors flex items-center gap-2 mx-auto disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {paginationLoading ? (
-                  <>
-                    <div className="animate-spin h-4 w-4 border-2 border-white border-t-transparent rounded-full"></div>
-                    <span>Loading More Jobs...</span>
-                  </>
-                ) : (
-                  <>
-                    <span>Load More Jobs</span>
-                    <span className="text-sm opacity-75">({results.pagination.total_pages - currentPage} pages remaining)</span>
-                  </>
-                )}
-              </button>
-            </div>
-          )}
-
-          {(() => {
-            const deduplicatedJobs = deduplicateJobs(results.jobs);
-            const filteredJobs = deduplicatedJobs
-              .filter((job) => {
-                const threshold = minMatchFilter === '100' ? 1.0 : minMatchFilter === '80' ? 0.8 : minMatchFilter === '60' ? 0.6 : 0.0;
-                return (job.match_score ?? 0) >= threshold;
-              });
-            
-            if (filteredJobs.length === 0) {
-              return (
-            <div className="text-center py-12">
-              <div className="text-gray-500 text-lg">No jobs found matching your criteria</div>
-              <div className="text-gray-400 text-sm mt-2">Try adjusting your search terms or location</div>
-            </div>
-              );
-            }
-            
-            return null;
-          })()}
         </div>
       )}
-
-      {/* Scroll to top */}
-      {showScrollTop && (
-        <button
-          type="button"
-          onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
-          className="fixed bottom-6 right-6 h-10 w-10 rounded-full bg-gradient-to-r from-blue-600 to-teal-600 text-white shadow-lg hover:shadow-xl transition-all"
-          aria-label="Back to top"
-        >
-          ↑
-        </button>
-      )}
-      </div>
     </div>
   );
 }

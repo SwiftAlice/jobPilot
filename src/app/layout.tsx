@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import { ResumeProvider } from "@/contexts/ResumeContext";
+import Navigation from "@/components/Navigation";
 
 export const metadata: Metadata = {
   title: "JobPilot AI",
@@ -14,8 +15,12 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
+      <head>
+        <meta charSet="utf-8" />
+      </head>
       <body className="antialiased font-sans min-h-screen">
         <ResumeProvider>
+          <Navigation />
           {children}
         </ResumeProvider>
       </body>

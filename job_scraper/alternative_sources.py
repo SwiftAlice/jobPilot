@@ -16,6 +16,7 @@ def simplify_keywords(text: str, max_tokens: int = 3) -> str:
     return " ".join(tokens[:max_tokens])
 
 def strip_html(html: str) -> str:
+    """Strip HTML tags from text - DEPRECATED: Use clean_html_preserve_structure instead"""
     if not html:
         return ''
     try:
@@ -24,6 +25,66 @@ def strip_html(html: str) -> str:
     except Exception:
         # Fallback: basic tag removal
         return re.sub(r'<[^>]+>', ' ', html)
+
+def clean_html_preserve_structure(html_elem) -> str:
+    """
+    Clean HTML element but preserve structure (headings, paragraphs, lists, etc.)
+    Removes scripts, styles, but keeps formatting tags.
+    Preserves UTF-8 encoding for emojis and special characters.
+    """
+    if not html_elem:
+        return ''
+    
+    # If it's a string, use it directly
+    if isinstance(html_elem, str):
+        html_str = html_elem
+    # If it's a BeautifulSoup element, get its inner HTML
+    elif hasattr(html_elem, 'decode_contents'):
+        # BeautifulSoup Tag element - get contents with UTF-8
+        html_str = html_elem.decode_contents(formatter='html')
+    elif hasattr(html_elem, '__str__'):
+        html_str = str(html_elem)
+    else:
+        html_str = str(html_elem)
+    
+    # Ensure html_str is a string and handle encoding
+    if isinstance(html_str, bytes):
+        html_str = html_str.decode('utf-8', errors='ignore')
+    
+    if not html_str:
+        return ''
+    
+    # Check if it's already HTML (contains tags)
+    if not re.search(r'<[a-z][\s\S]*>', html_str, re.IGNORECASE):
+        # Not HTML, return as-is (plain text) - already UTF-8 encoded
+        return html_str
+    
+    # Parse to clean it with UTF-8 support
+    soup = BeautifulSoup(html_str, 'html.parser', from_encoding='utf-8')
+    
+    # Remove unsafe/unwanted tags but keep structure
+    for tag in soup.find_all(['script', 'style', 'noscript', 'nav', 'header', 'footer', 'form', 'input', 'button']):
+        tag.decompose()
+    
+    # Remove onclick and other event handlers
+    for tag in soup.find_all(True):
+        # Remove all attributes except href for links
+        allowed_attrs = ['href', 'target', 'rel']
+        tag.attrs = {k: v for k, v in tag.attrs.items() if k in allowed_attrs}
+    
+    # Get the cleaned HTML with UTF-8 encoding preserved
+    # BeautifulSoup in Python 3 returns Unicode strings by default
+    cleaned = str(soup)
+    
+    # Ensure the result is a properly encoded UTF-8 string
+    if isinstance(cleaned, bytes):
+        cleaned = cleaned.decode('utf-8', errors='ignore')
+    
+    # Clean up extra whitespace but preserve structure and special characters
+    cleaned = re.sub(r'\s+', ' ', cleaned, flags=re.UNICODE)  # Multiple spaces to single (Unicode-aware)
+    cleaned = re.sub(r'>\s+<', '><', cleaned)  # Spaces between tags
+    
+    return cleaned.strip()
 
 class AdzunaScraper:
     """Adzuna job aggregator API"""
@@ -122,16 +183,19 @@ class AdzunaScraper:
     def parse_adzuna_job(self, job_data: Dict[str, Any]) -> JobPosting:
         """Parse Adzuna job data"""
         try:
+            raw_desc = job_data.get('description', '')
+            # Preserve HTML if present, otherwise use as plain text
+            description = clean_html_preserve_structure(raw_desc) if raw_desc else ''
             return JobPosting(
                 id=f"adzuna_{job_data.get('id', '')}",
                 title=job_data.get('title', 'N/A'),
                 company=job_data.get('company', {}).get('display_name', 'N/A'),
                 location=job_data.get('location', {}).get('display_name', 'N/A'),
-                description=job_data.get('description', ''),
+                description=description,
                 url=job_data.get('redirect_url', ''),
                 source=JobSource.ADZUNA,
                 skills_required=self.extract_skills_from_text(
-                    f"{job_data.get('title', '')} {job_data.get('description', '')}"
+                    f"{job_data.get('title', '')} {raw_desc}"
                 )
             )
         except Exception as e:
@@ -163,9 +227,14 @@ class JoobleScraper:
         """Search jobs using Jooble API (official POST format)"""
         jobs: List[JobPosting] = []
         simple_what = simplify_keywords(keywords, max_tokens=3)
+        
+        # If "remote" is in keywords, use empty location (Jooble will search globally)
+        # Jooble API doesn't have explicit remote filter, so we rely on keywords containing "remote"
+        payload_location = '' if 'remote' in keywords.lower() or not location else location
+        
         payload = {
             'keywords': simple_what,
-            'location': '',
+            'location': payload_location,
             'page': 1,
             'searchMode': 1
         }
@@ -187,16 +256,19 @@ class JoobleScraper:
     def parse_jooble_job(self, job_data: Dict[str, Any]) -> JobPosting:
         """Parse Jooble job data"""
         try:
+            raw_desc = job_data.get('description', '')
+            # Preserve HTML if present, otherwise use as plain text
+            description = clean_html_preserve_structure(raw_desc) if raw_desc else ''
             return JobPosting(
                 id=f"jooble_{job_data.get('id', '')}",
                 title=job_data.get('title', 'N/A'),
                 company=job_data.get('company', 'N/A'),
                 location=job_data.get('location', 'N/A'),
-                description=job_data.get('description', ''),
+                description=description,
                 url=job_data.get('link', ''),
                 source=JobSource.JOOBLE,
                 skills_required=self.extract_skills_from_text(
-                    f"{job_data.get('title', '')} {job_data.get('description', '')}"
+                    f"{job_data.get('title', '')} {raw_desc}"
                 )
             )
         except Exception as e:
@@ -250,16 +322,19 @@ class GitHubJobsScraper:
     def parse_github_job(self, job_data: Dict[str, Any]) -> JobPosting:
         """Parse GitHub Jobs data"""
         try:
+            raw_desc = job_data.get('description', '')
+            # Preserve HTML if present, otherwise use as plain text
+            description = clean_html_preserve_structure(raw_desc) if raw_desc else ''
             return JobPosting(
                 id=f"github_{job_data.get('id', '')}",
                 title=job_data.get('title', 'N/A'),
                 company=job_data.get('company', 'N/A'),
                 location=job_data.get('location', 'N/A'),
-                description=job_data.get('description', ''),
+                description=description,
                 url=job_data.get('url', ''),
                 source=JobSource.GITHUB,
                 skills_required=self.extract_skills_from_text(
-                    f"{job_data.get('title', '')} {job_data.get('description', '')}"
+                    f"{job_data.get('title', '')} {raw_desc}"
                 )
             )
         except Exception as e:
@@ -323,7 +398,8 @@ class RemoteOKScraper:
         """Parse RemoteOK job data"""
         try:
             raw_desc = job_data.get('description', '')
-            clean_desc = strip_html(raw_desc)
+            # Preserve HTML structure instead of stripping
+            clean_desc = clean_html_preserve_structure(raw_desc) if raw_desc else ''
             return JobPosting(
                 id=f"remoteok_{job_data.get('id', '')}",
                 title=job_data.get('position', 'N/A'),

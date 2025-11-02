@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { 
   User, 
   FileUp, 
@@ -9,6 +9,7 @@ import {
   Target
 } from 'lucide-react';
 import { ResumeData, UploadedFiles } from '@/types/resume-builder-types';
+import { supabase } from '@/lib/supabaseClient';
 
 interface ResumeFormProps {
   localResumeData: ResumeData;
@@ -50,6 +51,8 @@ interface ResumeFormProps {
   tailorSummaryToJD?: () => Promise<void>;
   isTailoringSummary?: boolean;
   inputJDForTailoring?: string;
+  authenticated: boolean;
+  user?: any;
 }
 
 const ResumeForm: React.FC<ResumeFormProps> = ({
@@ -91,7 +94,9 @@ const ResumeForm: React.FC<ResumeFormProps> = ({
   updateATSScore,
   tailorSummaryToJD,
   isTailoringSummary,
-  inputJDForTailoring
+  inputJDForTailoring,
+  authenticated,
+  user
 }) => {
   const [showJDModal, setShowJDModal] = useState(false);
   const [tempJD, setTempJD] = useState('');
@@ -104,17 +109,54 @@ const ResumeForm: React.FC<ResumeFormProps> = ({
 
   // Determine if generate button should be enabled
   const canGenerate = () => {
+    if (!authenticated) return false;
     if (useManualInput) {
-      // For manual input, check if basic info is filled
       return localResumeData.personalInfo.fullName.trim() !== '' || 
              localResumeData.personalInfo.summary.trim() !== '' ||
              (Array.isArray(localResumeData.skills) && localResumeData.skills.length > 0);
     } else if (useResumeUpload) {
-      // For resume upload, check if file is uploaded and parsed
       return uploadedFiles.resume !== null && extractedData !== null;
     }
     return false;
   };
+
+  if (!authenticated) {
+    return (
+      <div className="relative">
+        <div className="absolute inset-0 -z-10 bg-gradient-to-br from-blue-50 via-teal-50 to-white rounded-2xl" />
+        <div className="max-w-3xl mx-auto bg-white rounded-2xl shadow-xl ring-1 ring-gray-100 p-10 text-center">
+          <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-gradient-to-br from-blue-600 to-teal-500 text-white shadow-lg mb-4">
+            <svg viewBox="0 0 24 24" className="w-7 h-7" aria-hidden>
+              <path fill="currentColor" d="M12 2a10 10 0 1 0 10 10A10.011 10.011 0 0 0 12 2Z" opacity=".08"/>
+              <path fill="currentColor" d="M8 12a4 4 0 1 1 4 4 4 4 0 0 1-4-4Z"/>
+            </svg>
+          </div>
+          <h1 className="text-3xl md:text-4xl font-extrabold tracking-tight text-slate-900 mb-2">Sign in to continue</h1>
+          <p className="text-slate-600 max-w-xl mx-auto mb-8">Create an account to upload your resume, auto-save progress, and sync across devices.</p>
+
+          <button
+            onClick={() => (window.location.href = '/api/auth/login')}
+            className="mx-auto inline-flex items-center gap-3 px-6 py-3 rounded-xl bg-white text-slate-800 border border-slate-200 hover:bg-slate-50 shadow-sm"
+          >
+            <svg className="w-5 h-5" viewBox="0 0 48 48"><path fill="#FFC107" d="M43.611 20.083H42V20H24v8h11.303A12.002 12.002 0 0 1 12 24c0-6.627 5.373-12 12-12 3.059 0 5.842 1.152 7.961 3.039l5.657-5.657C33.046 6.053 28.723 4 24 4 12.955 4 4 12.955 4 24s8.955 20 20 20 20-8.955 20-20c0-1.341-.138-2.651-.389-3.917z"/><path fill="#FF3D00" d="M6.306 14.691l6.571 4.818A11.996 11.996 0 0 1 24 12c3.059 0 5.842 1.152 7.961 3.039l5.657-5.657C33.046 6.053 28.723 4 24 4 16.318 4 9.656 8.337 6.306 14.691z"/><path fill="#4CAF50" d="M24 44c4.646 0 8.903-1.782 12.102-4.688l-5.59-4.727A11.94 11.94 0 0 1 24 36c-5.289 0-9.747-3.404-11.367-8.158l-6.49 5.005C9.418 39.556 16.117 44 24 44z"/><path fill="#1976D2" d="M43.611 20.083H42V20H24v8h11.303a12.027 12.027 0 0 1-4.092 5.785l.003-.002 5.59 4.727C35.971 39.205 44 34 44 24c0-1.341-.138-2.651-.389-3.917z"/></svg>
+            <span className="font-semibold">Continue with Google</span>
+          </button>
+
+          <div className="mt-8 grid grid-cols-1 md:grid-cols-3 gap-4 text-left">
+            <div className="p-4 rounded-xl bg-slate-50 border border-slate-100">
+              <p className="text-sm text-slate-700"><span className="font-semibold">Auto‑save</span> your resume and settings</p>
+            </div>
+            <div className="p-4 rounded-xl bg-slate-50 border border-slate-100">
+              <p className="text-sm text-slate-700"><span className="font-semibold">One‑click</span> apply workflow</p>
+            </div>
+            <div className="p-4 rounded-xl bg-slate-50 border border-slate-100">
+              <p className="text-sm text-slate-700"><span className="font-semibold">Secure</span> and private by design</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="bg-white rounded-xl shadow-lg p-8">

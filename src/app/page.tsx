@@ -1,42 +1,29 @@
+'use client';
 import Link from 'next/link';
 import Image from 'next/image';
+import { useEffect, useState } from 'react';
+import { supabase } from '@/lib/supabaseClient';
 
 export default function Home() {
+  const [authUser, setAuthUser] = useState<{ email: string|null, name: string|null } | null>(null);
+  useEffect(() => {
+    let mounted = true;
+    const load = async () => {
+      try {
+        const res = await fetch('/api/auth/session', { cache: 'no-store' });
+        const data = await res.json();
+        const user = data?.authenticated ? (data.user ?? null) : null;
+        if (mounted) setAuthUser(user ? { email: user.email, name: user.name } : null);
+      } catch {
+        if (mounted) setAuthUser(null);
+      }
+    };
+    load();
+  }, []);
+
   return (
     <div className="min-h-screen">
-      {/* Header */}
-      <header className="sticky top-0 z-50">
-        <div className="container-page py-4">
-          <div className="flex items-center justify-between h-16 rounded-xl bg-white/60 backdrop-blur-xl px-4 md:px-6">
-            <Link href="/" className="flex items-center space-x-3">
-              <span className="h-12 w-12 rounded-xl bg-gradient-to-br from-blue-600 to-teal-500 p-1 flex items-center justify-center">
-                <Image src="/logo.svg" alt="JobPilot AI" width={1044} height={1044} />
-              </span>
-              <span className="flex flex-col leading-tight">
-                <span className="heading text-lg md:text-xl font-extrabold text-gray-900">
-                  JobPilot <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-teal-600">AI</span>
-                </span>
-                <span className="text-[10px] md:text-xs text-gray-500">Build · Tailor · Apply — on autopilot</span>
-              </span>
-            </Link>
-
-            <nav className="hidden md:flex items-center gap-6">
-              <Link href="#features" className="text-gray-600 hover:text-gray-900 transition-colors">Features</Link>
-              <Link href="#how-it-works" className="text-gray-600 hover:text-gray-900 transition-colors">How it Works</Link>
-              <Link href="/jobs" className="text-gray-600 hover:text-gray-900 transition-colors">Find Jobs</Link>
-              <Link href="/jdBuilder" className="text-gray-600 hover:text-gray-900 transition-colors">Resume Builder</Link>
-            </nav>
-
-            <div className="flex items-center">
-              <Link href="/jobs" className="px-5 py-2 rounded-lg text-white font-medium bg-gradient-to-r from-blue-600 to-teal-600 shadow hover:shadow-md hover:scale-[1.02] active:scale-[0.99] transition-all">
-                Get Started
-              </Link>
-            </div>
-          </div>
-        </div>
-      </header>
-
-      {/* Hero Section */}
+      {/* Main Hero Section, no header here anymore */}
       <section className="py-20 bg-white min-h-[calc(100vh-4rem)] flex items-center">
         <div className="container-page">
           <div className="grid md:grid-cols-2 gap-12 items-center">
