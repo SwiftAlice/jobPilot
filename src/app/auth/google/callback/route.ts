@@ -34,8 +34,8 @@ export async function GET(req: NextRequest) {
               window.opener.location.reload();
               window.close();
             } else {
-              // If no opener, redirect to jobs page
-              window.location.href = 'http://localhost:3000/jobs?gmail_auth=error';
+              // If no opener, redirect to jobs page with current origin
+              window.location.href = window.location.origin + '/jobs?gmail_auth=error';
             }
           </script>
         </body>
@@ -72,8 +72,8 @@ export async function GET(req: NextRequest) {
               window.opener.location.reload();
               window.close();
             } else {
-              // If no opener, redirect to jobs page
-              window.location.href = 'http://localhost:3000/jobs?gmail_auth=no_code';
+              // If no opener, redirect to jobs page with current origin
+              window.location.href = window.location.origin + '/jobs?gmail_auth=no_code';
             }
           </script>
         </body>
@@ -90,6 +90,9 @@ export async function GET(req: NextRequest) {
     // Store tokens in localStorage via client-side redirect
     const tokensJson = JSON.stringify(tokens);
     const encodedTokens = encodeURIComponent(tokensJson);
+    
+    // Escape JSON for use in JavaScript string
+    const escapedTokensJson = tokensJson.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '\\"');
     
     // Return HTML page that closes tab and refreshes parent
     return new NextResponse(`
@@ -110,23 +113,32 @@ export async function GET(req: NextRequest) {
           <p>You have successfully connected your Gmail account.</p>
         </div>
         <div class="spinner"></div>
-        <p>Closing this window and refreshing the main page...</p>
+        <p>Closing this window...</p>
         <script>
-          // Store tokens in localStorage and refresh parent window
+          // Store tokens in localStorage first
           try {
-            localStorage.setItem('gmailTokens', '${tokensJson.replace(/'/g, "\\'")}');
+            const tokensJson = '${escapedTokensJson}';
+            localStorage.setItem('gmailTokens', tokensJson);
             localStorage.setItem('gmailAuthenticated', 'true');
           } catch (e) {
             console.error('Failed to store tokens:', e);
           }
           
-          // Close this tab and refresh the parent window
+          // Notify parent window instead of reloading
           if (window.opener) {
-            window.opener.location.reload();
-            window.close();
+            // Send message to parent window to update Gmail auth status
+            // The parent will read from localStorage, but we also send tokens as backup
+            window.opener.postMessage({
+              type: 'gmail-auth-success',
+              tokens: '${encodedTokens}'
+            }, window.location.origin);
+            // Give a small delay for the message to be sent, then close
+            setTimeout(() => {
+              window.close();
+            }, 100);
           } else {
-            // If no opener, redirect to jobs page with success
-            window.location.href = 'http://localhost:3000/jobs?gmail_auth=success&tokens=${encodedTokens}';
+            // If no opener, redirect to jobs page with success (using current origin)
+            window.location.href = window.location.origin + '/jobs?gmail_auth=success&tokens=' + '${encodedTokens}';
           }
         </script>
       </body>
@@ -162,8 +174,8 @@ export async function GET(req: NextRequest) {
             window.opener.location.reload();
             window.close();
           } else {
-            // If no opener, redirect to jobs page
-            window.location.href = 'http://localhost:3000/jobs?gmail_auth=error';
+            // If no opener, redirect to jobs page with current origin
+            window.location.href = window.location.origin + '/jobs?gmail_auth=error';
           }
         </script>
       </body>

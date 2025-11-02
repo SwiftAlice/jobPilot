@@ -114,9 +114,18 @@ export function createOAuth2Client() {
 
 /**
  * Generate OAuth2 authorization URL
+ * @param redirectUri - Optional redirect URI. If not provided, uses GOOGLE_REDIRECT_URI from config
  */
-export function getAuthUrl(): string {
-  const oauth2Client = createOAuth2Client();
+export function getAuthUrl(redirectUri?: string): string {
+  // Use provided redirect URI or fall back to config
+  const finalRedirectUri = redirectUri || API_CONFIG.GOOGLE_REDIRECT_URI;
+  
+  // Create OAuth client with the redirect URI
+  const oauth2Client = new google.auth.OAuth2(
+    API_CONFIG.GOOGLE_CLIENT_ID,
+    API_CONFIG.GOOGLE_CLIENT_SECRET,
+    finalRedirectUri
+  );
   
   const scopes = [
     'https://www.googleapis.com/auth/gmail.compose',

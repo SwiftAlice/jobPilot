@@ -78,7 +78,7 @@ export const MODEL_CONFIGS = {
   'gpt-3.5-turbo': {
     maxTokens: 2000,
     temperature: 0.1,
-    timeout: 15000, // 15 seconds
+    timeout: 45000, // 45 seconds
     pollingInterval: 500 // 500ms
   },
   'gpt-4o-mini': {

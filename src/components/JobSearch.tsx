@@ -544,14 +544,48 @@ export default function JobSearch({ onJobSelect, className = '' }: JobSearchProp
           'width=500,height=600,scrollbars=yes,resizable=yes'
         );
         
+        // Listen for message from popup window
+        const handleMessage = (event: MessageEvent) => {
+          // Verify origin for security
+          if (event.origin !== window.location.origin) return;
+          
+          if (event.data?.type === 'gmail-auth-success') {
+            // Authentication successful - update state without reloading page
+            try {
+              const tokensJson = decodeURIComponent(event.data.tokens);
+              const tokens = JSON.parse(tokensJson);
+              localStorage.setItem('gmailTokens', tokensJson);
+              setGmailTokens(tokens);
+              setGmailAuthenticated(true);
+              // Stop monitoring popup
+              clearInterval(checkClosed);
+              window.removeEventListener('message', handleMessage);
+              // Show success message
+              alert('✅ Gmail authentication successful! You can now create drafts.');
+            } catch (e) {
+              console.error('Failed to parse tokens:', e);
+              alert('⚠️ Authentication completed but failed to save tokens. Please try again.');
+            }
+          }
+        };
+        
+        window.addEventListener('message', handleMessage);
+        
+        // Monitor popup for completion (fallback if message doesn't arrive)
         const checkClosed = setInterval(() => {
           if (popup?.closed) {
             clearInterval(checkClosed);
+            window.removeEventListener('message', handleMessage);
+            // Check if authentication was successful
             const tokens = localStorage.getItem('gmailTokens');
             if (tokens) {
-              setGmailTokens(JSON.parse(tokens));
-              setGmailAuthenticated(true);
-              alert('✅ Gmail authentication successful! You can now create drafts.');
+              try {
+                setGmailTokens(JSON.parse(tokens));
+                setGmailAuthenticated(true);
+                alert('✅ Gmail authentication successful! You can now create drafts.');
+              } catch (e) {
+                console.error('Failed to parse tokens:', e);
+              }
             }
           }
         }, 1000);
@@ -689,8 +723,8 @@ export default function JobSearch({ onJobSelect, className = '' }: JobSearchProp
                 {results.jobs
                   .filter(job => !hiddenJobIds.includes(job.id))
                   .map(job => (
-                    <div key={job.id} className="p-4 mb-3 border rounded-xl shadow-md flex flex-col md:flex-row md:justify-between md:items-center bg-white">
-                      <div className="md:max-w-[70%]">
+                    <div key={job.id} className="p-4 mb-3 border rounded-xl shadow-md flex flex-col md:flex-row md:justify-between md:items-start bg-white">
+                      <div className="md:max-w-[70%] flex-1">
                         <div className="font-bold text-lg">{job.title}</div>
                         <div className="text-gray-700">{job.company}, {job.location}</div>
                         <div className="text-gray-500 text-sm">{job.source} | {job.match_score && (Math.round(job.match_score * 100) + '% match')}</div>
@@ -704,7 +738,7 @@ export default function JobSearch({ onJobSelect, className = '' }: JobSearchProp
                           </p>
                         )}
                       </div>
-                      <div className="flex gap-2 mt-2 md:mt-0">
+                      <div className="flex gap-2 mt-2 md:mt-0 md:self-start">
                         <button
                           type="button"
                           className="px-4 py-2 rounded bg-gray-50 hover:bg-gray-100 border border-gray-200 text-gray-700 shadow"

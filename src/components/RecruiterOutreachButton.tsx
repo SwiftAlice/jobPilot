@@ -150,16 +150,48 @@ const RecruiterOutreachButton: React.FC<RecruiterOutreachButtonProps> = ({ jobTi
           'width=500,height=600,scrollbars=yes,resizable=yes'
         );
         
-        // Monitor popup for completion
+        // Listen for message from popup window
+        const handleMessage = (event: MessageEvent) => {
+          // Verify origin for security
+          if (event.origin !== window.location.origin) return;
+          
+          if (event.data?.type === 'gmail-auth-success') {
+            // Authentication successful - update state
+            try {
+              const tokensJson = decodeURIComponent(event.data.tokens);
+              const tokens = JSON.parse(tokensJson);
+              localStorage.setItem('gmailTokens', tokensJson);
+              setGmailTokens(tokens);
+              setGmailAuthenticated(true);
+              // Stop monitoring popup
+              clearInterval(checkClosed);
+              window.removeEventListener('message', handleMessage);
+              // Show success message
+              alert('✅ Gmail authentication successful! You can now create drafts.');
+            } catch (e) {
+              console.error('Failed to parse tokens:', e);
+              alert('⚠️ Authentication completed but failed to save tokens. Please try again.');
+            }
+          }
+        };
+        
+        window.addEventListener('message', handleMessage);
+        
+        // Monitor popup for completion (fallback if message doesn't arrive)
         const checkClosed = setInterval(() => {
           if (popup?.closed) {
             clearInterval(checkClosed);
+            window.removeEventListener('message', handleMessage);
             // Check if authentication was successful
             const tokens = localStorage.getItem('gmailTokens');
             if (tokens) {
-              setGmailTokens(JSON.parse(tokens));
-              setGmailAuthenticated(true);
-              alert('✅ Gmail authentication successful! You can now create drafts.');
+              try {
+                setGmailTokens(JSON.parse(tokens));
+                setGmailAuthenticated(true);
+                alert('✅ Gmail authentication successful! You can now create drafts.');
+              } catch (e) {
+                console.error('Failed to parse tokens:', e);
+              }
             }
           }
         }, 1000);
@@ -434,7 +466,7 @@ const RecruiterOutreachButton: React.FC<RecruiterOutreachButtonProps> = ({ jobTi
                         className="px-3 py-1 rounded bg-blue-600 text-white text-sm hover:bg-blue-700 relative"
                         title="LinkedIn Messaging API requires partner approval - currently shows profile with pre-drafted message"
                       >
-                        LinkedIn (Coming Soon)
+                        LinkedIn
                       </button>
                     )}
                   </div>
