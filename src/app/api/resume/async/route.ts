@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { CURRENT_MODEL, getCurrentModelConfig } from '@/lib/llm-config';
+import { LLM_MODELS, MODEL_CONFIGS } from '@/lib/llm-config';
 
 // Helper function to clean AI response
 function cleanAIResponse(response: string): string {
@@ -72,6 +72,12 @@ function validateAndFixJSON(jsonString: string): string {
 
 export async function POST(request: NextRequest) {
   try {
+    // Get model from query params (default to QUALITY)
+    const { searchParams } = new URL(request.url);
+    const modelKey = searchParams.get('model') || 'QUALITY';
+    const selectedModel = LLM_MODELS[modelKey as keyof typeof LLM_MODELS] || LLM_MODELS.QUALITY;
+    const modelConfig = MODEL_CONFIGS[selectedModel.name as keyof typeof MODEL_CONFIGS];
+    
     const formData = await request.formData();
     const file = formData.get('file') as File;
     
@@ -101,7 +107,7 @@ export async function POST(request: NextRequest) {
         };
 
         // Start async parsing
-        parseResumeAsync(file, sendChunk, sendError, sendComplete);
+        parseResumeAsync(file, selectedModel, modelConfig, sendChunk, sendError, sendComplete);
       }
     });
 
@@ -123,7 +129,9 @@ export async function POST(request: NextRequest) {
 }
 
 async function parseResumeAsync(
-  file: File, 
+  file: File,
+  selectedModel: { name: string; description: string; speed: string; quality: string; cost: string; estimatedTime: string },
+  modelConfig: { maxTokens: number; temperature: number; timeout: number; pollingInterval: number },
   sendChunk: (data: unknown) => void, 
   sendError: (error: string) => void, 
   sendComplete: () => void
@@ -180,29 +188,36 @@ async function parseResumeAsync(
       progress: 40 
     });
 
-    const prompt = `Extract resume data as VALID JSON. Return ONLY valid JSON, no explanations or additional text.
+    const prompt = `You are a resume data extraction assistant. Extract ALL information from the uploaded resume file and return it as VALID JSON.
 
-IMPORTANT JSON FORMATTING RULES:
-- All strings must be properly quoted with double quotes
-- No trailing commas in arrays or objects
-- All special characters in strings must be escaped
-- Ensure all brackets and braces are properly closed
-- Return ONLY the JSON object, no markdown or code blocks
+⚠️ CRITICAL: Pay close attention to text formatting in the PDF. Look for BOLD or emphasized text (darker, thicker letters) and wrap it with **double asterisks**.
 
+RESPONSE FORMAT - Return ONLY this JSON structure with actual data from the resume:
 {
   "personalInfo": {
-    "fullName": "name",
-    "email": "email", 
-    "phone": "phone",
-    "location": "location",
-    "linkedin": "linkedin",
-    "website": "website",
-    "summary": "EXACT summary text from resume - preserve original wording, metrics, and achievements"
+    "fullName": "extracted full name from resume",
+    "email": "extracted email", 
+    "phone": "extracted phone",
+    "location": "extracted location",
+    "linkedin": "extracted linkedin URL",
+    "website": "extracted website URL",
+    "summary": "extracted professional summary text"
   },
-  "experience": [{"id": 1, "title": "title", "company": "company", "location": "location", "startDate": "YYYY-MM", "endDate": "YYYY-MM", "current": false, "description": ["bullet1", "bullet2"]}, {"id": 2, "title": "title2", "company": "company2", "location": "location2", "startDate": "YYYY-MM", "endDate": "YYYY-MM", "current": false, "description": ["bullet1", "bullet2"]}],
-  "education": [{"id": 1, "degree": "degree", "institution": "institution", "location": "location", "year": "year", "gpa": "gpa"}],
-  "skills": ["skill1", "skill2"],
-  "projects": [{"id": 1, "name": "name", "description": "desc", "technologies": ["tech1"], "link": "link"}]
+  "experience": [
+    {
+      "id": 1,
+      "title": "actual job title",
+      "company": "actual company name",
+      "location": "actual job location",
+      "startDate": "YYYY-MM format",
+      "endDate": "YYYY-MM format",
+      "current": false,
+      "description": ["actual bullet point 1", "actual bullet point 2"]
+    }
+  ],
+  "education": [{"id": 1, "degree": "actual degree", "institution": "actual institution", "location": "actual location", "year": "actual year", "gpa": "actual gpa"}],
+  "skills": ["actual skill 1", "actual skill 2"],
+  "projects": [{"id": 1, "name": "actual project name", "description": "actual description", "technologies": ["actual tech"], "link": "actual link"}]
 }
 
 CRITICAL INSTRUCTIONS:
@@ -225,13 +240,31 @@ CRITICAL INSTRUCTIONS:
    - Summarize or condense bullet points
    - Skip any achievements or responsibilities
    - Combine multiple bullet points into one
-   - Remove any metrics, numbers, or specific details`;
+   - Remove any metrics, numbers, or specific details
+
+4. CRITICAL - BOLD TEXT DETECTION: Look carefully at the visual appearance of text in the PDF. Bold text appears darker and thicker than regular text.
+   
+   EXAMPLES of what to look for and how to format:
+   - If you see text that looks DARKER/BOLDER like "Revenue Growth:" followed by normal text "Led initiatives..."
+     Extract as: "**Revenue Growth:** Led initiatives..."
+   
+   - If you see a category name in BOLD like "Strategic Planning:" followed by description
+     Extract as: "**Strategic Planning:** description here"
+   
+   - If the ENTIRE first part is bold like "Product Strategy & Growth:" followed by details
+     Extract as: "**Product Strategy & Growth:** details here"
+   
+   REMEMBER: 
+   - Look at font weight/thickness, not just capital letters
+   - Bold text will appear visually heavier/darker in the PDF
+   - Wrap ANY bold text with **asterisks** before and after
+   - If unsure, check if text stands out visually from the rest`;
 
     const assistant = await client.beta.assistants.create({
       name: "Resume Parser",
-      model: CURRENT_MODEL.name, // Using configured model
+      model: selectedModel.name, // Using user-selected model
       tools: [{ type: "file_search" }],
-      instructions: "Extract resume data as VALID JSON only. Ensure proper JSON formatting with no trailing commas, proper quotes, and complete brackets. CRITICAL: Extract ALL work experiences from the resume - do not skip any positions, internships, or contract work. For each experience, preserve ALL bullet points and achievements exactly as written. For the summary field, copy the EXACT text from the resume without any changes, paraphrasing, or improvements. Preserve all metrics, numbers, achievements, and original wording. Do not summarize or rewrite any content."
+      instructions: "Extract resume data as VALID JSON only. Ensure proper JSON formatting with no trailing commas, proper quotes, and complete brackets. CRITICAL: Extract ALL work experiences from the resume - do not skip any positions, internships, or contract work. For each experience, preserve ALL bullet points and achievements exactly as written. For the summary field, copy the EXACT text from the resume without any changes, paraphrasing, or improvements. Preserve all metrics, numbers, achievements, and original wording. Do not summarize or rewrite any content. IMPORTANT: Detect and preserve bold text formatting by wrapping bold text with **double asterisks** (e.g., **Bold Text:** regular text). Only mark text that is actually bold in the original document."
     });
 
     sendChunk({ 
@@ -264,8 +297,7 @@ CRITICAL INSTRUCTIONS:
       }
     );
 
-    // Poll for completion with progress updates
-    const modelConfig = getCurrentModelConfig();
+    // Poll for completion with progress updates (using model config from top)
     let runStatus = await client.beta.threads.runs.retrieve(thread.id, run.id);
     let attempts = 0;
     const maxAttempts = Math.floor(modelConfig.timeout / modelConfig.pollingInterval);

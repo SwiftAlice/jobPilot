@@ -24,6 +24,90 @@ import { ResumeData, JDData, ATSScore, UploadedFiles, ResumeTemplate } from '@/t
 import { debounce, calculateATSScore, extractKeywords } from '@/lib/resume-utils';
 import { generatePDF, generatePDFFromDom } from '@/lib/pdf-utils';
 
+const fileToDataUrl = (file: File): Promise<string> => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = (err) => reject(err);
+    reader.readAsDataURL(file);
+  });
+};
+
+const dataUrlToFile = (dataUrl: string, filename: string, fallbackType?: string): File => {
+  const parts = dataUrl.split(',');
+  if (parts.length < 2) {
+    throw new Error('Invalid data URL');
+  }
+  const mimeMatch = parts[0].match(/:(.*?);/);
+  const mime = fallbackType || (mimeMatch ? mimeMatch[1] : 'application/octet-stream');
+  const binaryString = atob(parts[1]);
+  const len = binaryString.length;
+  const bytes = new Uint8Array(len);
+  for (let i = 0; i < len; i++) {
+    bytes[i] = binaryString.charCodeAt(i);
+  }
+  return new File([bytes], filename, { type: mime });
+};
+
+const compressDataUrl = async (dataUrl: string, maxDimension = 360, quality = 0.85): Promise<string> => {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      let { width, height } = img;
+      const maxSide = Math.max(width, height);
+      if (maxSide > maxDimension) {
+        const scale = maxDimension / maxSide;
+        width = width * scale;
+        height = height * scale;
+      }
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) {
+        reject(new Error('Canvas context not available'));
+        return;
+      }
+      ctx.drawImage(img, 0, 0, width, height);
+      resolve(canvas.toDataURL('image/jpeg', quality));
+    };
+    img.onerror = reject;
+    img.src = dataUrl;
+  });
+};
+
+const normalizeProfileImage = async (file?: File, fallbackDataUrl?: string) => {
+  let sourceDataUrl: string | undefined;
+  let fileName = 'profile-picture.jpg';
+  let fileType = 'image/jpeg';
+
+  if (file) {
+    fileName = file.name;
+    fileType = file.type || fileType;
+    sourceDataUrl = await fileToDataUrl(file);
+  } else if (fallbackDataUrl) {
+    sourceDataUrl = fallbackDataUrl;
+  }
+
+  if (!sourceDataUrl) {
+    return undefined;
+  }
+
+  try {
+    const compressedDataUrl = await compressDataUrl(sourceDataUrl);
+    return { dataUrl: compressedDataUrl, name: fileName, type: fileType };
+  } catch (error) {
+    console.error('Error compressing profile image:', error);
+    return { dataUrl: sourceDataUrl, name: fileName, type: fileType };
+  }
+};
+
+const cloneResumeData = (data: ResumeData): ResumeData => {
+  if (typeof structuredClone === 'function') {
+    return structuredClone(data);
+  }
+  return JSON.parse(JSON.stringify(data));
+};
 
 const ResumeJDBuilder = () => {
   const { resumeData, setResumeData, updateResumeData } = useResume();
@@ -109,6 +193,18 @@ const ResumeJDBuilder = () => {
   const [extractedData, setExtractedData] = useState<ResumeData | null>(null);
   const [atsScore, setAtsScore] = useState<ATSScore | null>(null);
   const [keywordMatches, setKeywordMatches] = useState<string[]>([]);
+  const [savedResumes, setSavedResumes] = useState<Array<{
+    id: string;
+    title: string;
+    template: string;
+    date: string;
+    resumeData: ResumeData;
+    profileImage?: {
+      dataUrl: string;
+      name?: string;
+      type?: string;
+    };
+  }>>([]);
   
   // Toggle switches for manual input vs resume upload
   const [useResumeUpload, setUseResumeUpload] = useState(true);
@@ -119,13 +215,27 @@ const ResumeJDBuilder = () => {
   
   // Template selection (persisted)
   const [selectedTemplate, setSelectedTemplate] = useState('modern');
+  
+  // Model selection for resume parsing (persisted)
+  const [selectedModel, setSelectedModel] = useState<'FASTEST' | 'FAST' | 'BALANCED' | 'QUALITY'>('QUALITY');
 
-  // Load selectedTemplate from localStorage on mount
+  // Load selectedTemplate, model, and saved resumes from localStorage on mount
   React.useEffect(() => {
     try {
       const storedTemplate = typeof window !== 'undefined' ? window.localStorage.getItem('selectedTemplate') : null;
       if (storedTemplate) {
         setSelectedTemplate(storedTemplate);
+      }
+      
+      const storedModel = typeof window !== 'undefined' ? window.localStorage.getItem('selectedModel') : null;
+      if (storedModel && ['FASTEST', 'FAST', 'BALANCED', 'QUALITY'].includes(storedModel)) {
+        setSelectedModel(storedModel as 'FASTEST' | 'FAST' | 'BALANCED' | 'QUALITY');
+      }
+      
+      // Load saved resumes
+      const savedResumesData = typeof window !== 'undefined' ? window.localStorage.getItem('savedResumes') : null;
+      if (savedResumesData) {
+        setSavedResumes(JSON.parse(savedResumesData));
       }
     } catch (_) {
       // ignore
@@ -142,6 +252,21 @@ const ResumeJDBuilder = () => {
       // ignore
     }
   }, [selectedTemplate]);
+  
+  // Persist selectedModel when it changes and update active model in llm-config
+  React.useEffect(() => {
+    try {
+      if (typeof window !== 'undefined' && selectedModel) {
+        window.localStorage.setItem('selectedModel', selectedModel);
+        // Update the active model in llm-config
+        import('@/lib/llm-config').then(({ setActiveModel }) => {
+          setActiveModel(selectedModel);
+        });
+      }
+    } catch (_) {
+      // ignore
+    }
+  }, [selectedModel]);
 
   // Use ref to track if update is coming from internal state change
   const isInternalUpdate = useRef(false);
@@ -162,70 +287,52 @@ const ResumeJDBuilder = () => {
     }
   }, [localResumeData, setResumeData]);
 
-  // Available resume templates
+  // Available resume templates - based on provided PDF designs
   const resumeTemplates: ResumeTemplate[] = [
     {
-      id: 'ats-modern',
-      name: 'ATS Modern',
-      description: 'Clean, modern design optimized for ATS parsing with proper section headers and formatting',
-      category: 'ats',
-      atsOptimized: true,
-      colorScheme: 'blue',
-      icon: '📋'
-    },
-    {
-      id: 'modern',
-      name: 'Modern Professional',
-      description: 'Clean, contemporary design with strong ATS optimization',
+      id: 'template-01',
+      name: 'Professional creative',
+      description: 'Modern design with profile picture, clean layout with colored accents',
       category: 'modern',
       atsOptimized: true,
       colorScheme: 'blue',
-      icon: '🎯'
-    },
-    {
-      id: 'classic',
-      name: 'Classic Corporate',
-      description: 'Traditional format preferred by conservative industries',
-      category: 'classic',
-      atsOptimized: true,
-      colorScheme: 'gray',
-      icon: '💼'
-    },
-    {
-      id: 'creative',
-      name: 'Creative Professional',
-      description: 'Bold design for creative and tech roles',
-      category: 'creative',
-      atsOptimized: true,
-      colorScheme: 'purple',
       icon: '🎨'
     },
     {
-      id: 'minimal',
-      name: 'Minimal Clean',
-      description: 'Ultra-clean design with maximum ATS compatibility',
-      category: 'minimal',
+      id: 'template-02',
+      name: 'Template 2',
+      description: 'Professional layout optimized for ATS systems',
+      category: 'modern',
       atsOptimized: true,
-      colorScheme: 'green',
-      icon: '✨'
+      colorScheme: 'gray',
+      icon: '📋'
     },
     {
-      id: 'executive',
-      name: 'Executive Summary',
-      description: 'High-level format for senior positions',
-      category: 'classic',
-      atsOptimized: true,
-      colorScheme: 'indigo',
-      icon: '👔'
-    },
-    {
-      id: 'technical',
-      name: 'Technical Specialist',
-      description: 'Optimized for technical and engineering roles',
+      id: 'template-04',
+      name: 'Template 3',
+      description: 'Contemporary design with structured sections',
       category: 'modern',
       atsOptimized: true,
       colorScheme: 'teal',
-      icon: '⚙️'
+      icon: '📝'
+    },
+    {
+      id: 'minimal',
+      name: 'Minimal',
+      description: 'Clean single-column layout inspired by premium design CVs',
+      category: 'minimal',
+      atsOptimized: true,
+      colorScheme: 'black',
+      icon: '🧾'
+    },
+    {
+      id: 'skyline',
+      name: 'Skyline Signature',
+      description: 'Elegant black-and-blue resume with crisp dividers and spotlighted experience',
+      category: 'modern',
+      atsOptimized: true,
+      colorScheme: 'navy',
+      icon: '🌆'
     }
   ];
 
@@ -259,8 +366,8 @@ const ResumeJDBuilder = () => {
       const formData = new FormData();
       formData.append('file', file);
       
-      // Call the async streaming API with cache busting
-      const response = await fetch(`/api/resume/async?t=${Date.now()}`, {
+      // Call the async streaming API with cache busting and selected model
+      const response = await fetch(`/api/resume/async?t=${Date.now()}&model=${selectedModel}`, {
         method: 'POST',
         body: formData,
         cache: 'no-cache',
@@ -344,6 +451,41 @@ const ResumeJDBuilder = () => {
                 debouncedUpdateATSScore(parsedData);
                 setUseResumeUpload(true);
                 setUseManualInput(false);
+                
+                // Save parsed resume to localStorage for future use
+                if (typeof window !== 'undefined' && file) {
+                  try {
+                    const existing = localStorage.getItem('previouslyParsedResumes');
+                    let parsedResumes: any[] = [];
+                    
+                    if (existing) {
+                      parsedResumes = JSON.parse(existing);
+                    }
+                    
+                    const newParsedResume = {
+                      id: Date.now().toString(),
+                      fileName: file.name,
+                      parsedAt: new Date().toISOString(),
+                      resumeData: { ...parsedData }
+                    };
+                    
+                    // Remove duplicate by fileName (keep the latest)
+                    parsedResumes = parsedResumes.filter((p: any) => p.fileName !== file.name);
+                    
+                    // Add new one at the beginning
+                    parsedResumes.unshift(newParsedResume);
+                    
+                    // Keep only last 10
+                    if (parsedResumes.length > 10) {
+                      parsedResumes = parsedResumes.slice(0, 10);
+                    }
+                    
+                    localStorage.setItem('previouslyParsedResumes', JSON.stringify(parsedResumes));
+                  } catch (e) {
+                    console.error('Error saving parsed resume:', e);
+                  }
+                }
+                
                 alert('Resume parsed successfully! The extracted information has been loaded. You can now edit any fields if needed.');
                 break;
               } else if (data.type === 'error') {
@@ -463,6 +605,14 @@ const ResumeJDBuilder = () => {
   // Fallback ATS score calculation (local)
   const fallbackATSScore = (newResumeData: ResumeData, jdText?: string) => {
     const jdToUse = jdText || inputJD.trim() || '';
+    // Only calculate ATS score if JD is provided
+    if (!jdToUse || !jdToUse.trim()) {
+      console.log('Skipping ATS calculation - no JD provided');
+      setAtsScore(null);
+      setKeywordMatches([]);
+      return;
+    }
+    
     console.log('Fallback ATS calculation - JD text:', jdToUse);
     console.log('Fallback ATS calculation - Resume data skills:', newResumeData.skills);
     const newAtsScore = calculateATSScore(newResumeData, jdToUse);
@@ -510,10 +660,15 @@ const ResumeJDBuilder = () => {
           ])],
         };
         
-        // Calculate ATS score
+        // Calculate ATS score only if JD is provided
+        if (inputJD && inputJD.trim()) {
         const atsResult = calculateATSScore(generatedResume, inputJD);
         setAtsScore(atsResult);
         setKeywordMatches(atsResult.matchedKeywords || []);
+        } else {
+          setAtsScore(null);
+          setKeywordMatches([]);
+        }
         
       } else {
         // Generic ATS-optimized resume
@@ -528,9 +683,9 @@ const ResumeJDBuilder = () => {
           ].slice(0, 30),
         };
         
-        // Calculate ATS score for the generated resume
-        const atsResult = calculateATSScore(generatedResume, '');
-        setAtsScore(atsResult);
+        // Don't calculate ATS score for generic resume (no JD)
+        setAtsScore(null);
+        setKeywordMatches([]);
       }
       
       setLocalResumeData(generatedResume);
@@ -637,6 +792,93 @@ const ResumeJDBuilder = () => {
     alert('DOCX generation would be implemented with docx.js library. This creates a downloadable Word document.');
   };
 
+  // Save resume with title, template, and date
+  const handleSaveResume = async () => {
+    const defaultTitle = localResumeData.personalInfo.fullName || 'Untitled Resume';
+    const title = prompt('Enter a title for this resume:', defaultTitle) || defaultTitle;
+    
+    if (!title.trim()) {
+      alert('Resume title cannot be empty.');
+      return;
+    }
+    
+    let profileImageData: { dataUrl: string; name?: string; type?: string } | undefined;
+    if (uploadedFiles.profile) {
+      profileImageData = await normalizeProfileImage(uploadedFiles.profile);
+    } else if (localResumeData.personalInfo.profileImageDataUrl) {
+      profileImageData = await normalizeProfileImage(undefined, localResumeData.personalInfo.profileImageDataUrl);
+    }
+
+    const clonedResume = cloneResumeData(localResumeData);
+    const resumeDataToSave: ResumeData = {
+      ...clonedResume,
+      personalInfo: {
+        ...clonedResume.personalInfo,
+        profileImageDataUrl:
+          profileImageData?.dataUrl || clonedResume.personalInfo.profileImageDataUrl,
+      },
+    };
+
+    const resumeToSave = {
+      id: `resume-${Date.now()}`,
+      title: title.trim(),
+      template: selectedTemplate,
+      date: new Date().toISOString(),
+      resumeData: resumeDataToSave,
+      profileImage: profileImageData
+    };
+
+    const updatedResumes = [...savedResumes, resumeToSave];
+    setSavedResumes(updatedResumes);
+    
+    try {
+      if (typeof window !== 'undefined') {
+        window.localStorage.setItem('savedResumes', JSON.stringify(updatedResumes));
+      }
+      alert(`Resume "${title}" saved successfully!`);
+    } catch (error) {
+      console.error('Error saving resume:', error);
+      alert('Error saving resume. Please try again.');
+    }
+  };
+
+  // Load a saved resume
+  const handleLoadResume = (savedResume: typeof savedResumes[0]) => {
+    const resumeClone = cloneResumeData(savedResume.resumeData);
+    setLocalResumeData(resumeClone);
+    setSelectedTemplate(savedResume.template);
+    
+    const imageDataUrl =
+      savedResume.profileImage?.dataUrl ||
+      savedResume.resumeData.personalInfo.profileImageDataUrl;
+    if (imageDataUrl) {
+      // We already have the data URL embedded in the resume, so rely on that.
+      // Clear any uploaded file so the preview uses the per-resume data URL.
+      setUploadedFiles(prev => ({ ...prev, profile: null }));
+    } else {
+      setUploadedFiles(prev => ({ ...prev, profile: null }));
+    }
+
+    setShowResumeEditor(true);
+  };
+
+  // Delete a saved resume
+  const handleDeleteResume = (id: string) => {
+    if (confirm('Are you sure you want to delete this saved resume?')) {
+      const updatedResumes = savedResumes.filter(r => r.id !== id);
+      setSavedResumes(updatedResumes);
+      
+      try {
+        if (typeof window !== 'undefined') {
+          window.localStorage.setItem('savedResumes', JSON.stringify(updatedResumes));
+        }
+      } catch (error) {
+        console.error('Error deleting resume:', error);
+        alert('Error deleting resume. Please try again.');
+      }
+    }
+  };
+
   // Get current template
   const currentTemplate = resumeTemplates.find(t => t.id === selectedTemplate) || resumeTemplates[0];
 
@@ -652,6 +894,20 @@ const ResumeJDBuilder = () => {
       }
     };
     getSession();
+  }, []);
+
+  // If user arrived from Jobs/Gmail overlay and requested editor, auto-open ResumeEditor
+  useEffect(() => {
+    try {
+      if (typeof window === 'undefined') return;
+      const shouldOpen = window.localStorage.getItem('openResumeEditor');
+      if (shouldOpen === '1') {
+        window.localStorage.removeItem('openResumeEditor');
+        setShowResumeEditor(true);
+      }
+    } catch {
+      // ignore
+    }
   }, []);
 
 
@@ -671,12 +927,11 @@ const ResumeJDBuilder = () => {
         setSelectedTemplate={setSelectedTemplate}
         resumeTemplates={resumeTemplates}
         uploadedFiles={uploadedFiles}
+        setUploadedFiles={setUploadedFiles}
         onBack={() => setShowResumeEditor(false)}
         onGeneratePDF={handleGeneratePDF}
         onSave={() => {
-          // Save logic here - could save to localStorage or send to API
-          console.log('Saving resume data:', localResumeData);
-          alert('Resume saved successfully!');
+          handleSaveResume();
         }}
         updateATSScore={updateATSScore}
         inputJD={inputJD}
@@ -702,6 +957,58 @@ const ResumeJDBuilder = () => {
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100">
       <div className="container mx-auto px-4 py-8 bg-white">
+        {/* Saved Resumes Section */}
+        {savedResumes.length > 0 && (
+          <div className="mb-8">
+            <h2 className="text-2xl font-bold text-gray-800 mb-4">Saved Resumes</h2>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {savedResumes.map((savedResume) => {
+                const templateName = resumeTemplates.find(t => t.id === savedResume.template)?.name || savedResume.template;
+                const savedDate = new Date(savedResume.date);
+                const formattedDate = savedDate.toLocaleDateString('en-US', { 
+                  year: 'numeric', 
+                  month: 'short', 
+                  day: 'numeric',
+                  hour: '2-digit',
+                  minute: '2-digit'
+                });
+                
+                return (
+                  <div 
+                    key={savedResume.id}
+                    className="bg-white rounded-lg shadow-md p-4 border border-gray-200 hover:shadow-lg transition-shadow cursor-pointer"
+                    onClick={() => handleLoadResume(savedResume)}
+                  >
+                    <div className="flex justify-between items-start mb-2">
+                      <h3 className="text-lg font-semibold text-gray-800 truncate flex-1">
+                        {savedResume.title}
+                      </h3>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleDeleteResume(savedResume.id);
+                        }}
+                        className="ml-2 text-red-500 hover:text-red-700 p-1"
+                        title="Delete resume"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
+                    <div className="text-sm text-gray-600 space-y-1">
+                      <div className="flex items-center gap-2">
+                        <FileText className="w-4 h-4" />
+                        <span>{templateName}</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span>{formattedDate}</span>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
         <ResumeForm
           localResumeData={localResumeData}
@@ -745,6 +1052,8 @@ const ResumeJDBuilder = () => {
           inputJDForTailoring={inputJD}
           authenticated={authState.authenticated}
           user={authState.user}
+          selectedModel={selectedModel}
+          setSelectedModel={setSelectedModel}
         />
       </div>
     </div>

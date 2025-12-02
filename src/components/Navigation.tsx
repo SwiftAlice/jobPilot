@@ -2,9 +2,13 @@
 import Link from 'next/link';
 import Image from 'next/image';
 import { useEffect, useState } from 'react';
+import { usePathname } from 'next/navigation';
 
 export default function Navigation() {
   const [user, setUser] = useState<{ name: string|null, email: string|null } | null>(null);
+  const pathname = usePathname();
+  const hidePrimaryNav = pathname?.startsWith('/jdBuilder') || pathname === '/jobs';
+
   useEffect(() => {
     let mounted = true;
     const load = async () => {
@@ -30,15 +34,19 @@ export default function Navigation() {
               <span className="text-[10px] md:text-xs text-gray-500 truncate">Build · Tailor · Apply — on autopilot</span>
             </span>
           </Link>
+          {!hidePrimaryNav && (
           <nav className="hidden md:flex items-center gap-6 flex-shrink-0">
             <Link href="#features" className="text-gray-600 hover:text-gray-900 transition-colors">Features</Link>
             <Link href="#how-it-works" className="text-gray-600 hover:text-gray-900 transition-colors">How it Works</Link>
             <Link href="/jobs" className="text-gray-600 hover:text-gray-900 transition-colors">Find Jobs</Link>
             <Link href="/jdBuilder" className="text-gray-600 hover:text-gray-900 transition-colors">Resume Builder</Link>
           </nav>
+          )}
         </div>
         <div className="flex items-center flex-shrink-0">
-          <Link href="/jobs" className="px-5 py-2 rounded-lg text-white font-medium bg-gradient-to-r from-blue-600 to-teal-600 shadow hover:shadow-md hover:scale-[1.02] active:scale-[0.99] transition-all">Get Started</Link>
+          <Link href={pathname === '/jobs' ? '/jdBuilder' : '/jobs'} className="px-5 py-2 rounded-lg text-white font-medium bg-gradient-to-r from-blue-600 to-teal-600 shadow hover:shadow-md hover:scale-[1.02] active:scale-[0.99] transition-all">
+            {pathname === '/jobs' ? 'Build Resume' : hidePrimaryNav ? 'Find Jobs' : 'Get Started'}
+          </Link>
         </div>
         <div className="flex flex-row flex-nowrap items-center gap-2 ml-2 flex-shrink-0 max-w-xs">
           {user ? (

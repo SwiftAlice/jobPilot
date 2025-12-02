@@ -258,15 +258,27 @@ export const calculateATSScore = (resumeData: ResumeData, jdText: string): ATSSc
     // JD-specific: up to 60 based on exact JD coverage
     keywordScore = Math.min(60, (matchedKeywords.length / jdKeywords.length) * 60);
   } else {
-    // Dynamic role-based: score based on industry standards for role level
-    const skillCount = allMatches.length;
-    const expectedSkills = standards.expectedSkills;
-    const strongSkills = standards.strongSkills;
+    // Generic mode: Focus on resume quality and internal consistency
+    // Check if skills are present and align with experience
+    const resumeSkills = resumeData.skills || [];
+    const hasSkills = resumeSkills.length > 0;
+    const hasReasonableSkillCount = resumeSkills.length >= 5;
     
-    if (skillCount >= strongSkills) keywordScore = 50; // Excellent
-    else if (skillCount >= expectedSkills) keywordScore = 40; // Good
-    else if (skillCount >= standards.minSkills) keywordScore = 30; // Fair
-    else keywordScore = Math.min(25, (skillCount / standards.minSkills) * 25); // Below expectations
+    // Check if skills mentioned in experience descriptions
+    const skillsInExperience = resumeData.experience.some(exp => 
+      Array.isArray(exp.description) && exp.description.some(desc => 
+        resumeSkills.some(skill => desc.toLowerCase().includes(skill.toLowerCase()))
+      )
+    );
+    
+    // Base score for having skills
+    if (hasReasonableSkillCount) keywordScore = 35; // Good skill coverage
+    else if (hasSkills) keywordScore = 25; // Some skills present
+    else keywordScore = 15; // No skills listed
+    
+    // Bonus for skills aligning with experience
+    if (skillsInExperience) keywordScore += 10; // Skills match experience
+    if (resumeSkills.length >= 10) keywordScore += 5; // Comprehensive skill list
   }
   
   // 2. Role/Domain Fit (Dynamic based on role inference confidence)
@@ -299,24 +311,37 @@ export const calculateATSScore = (resumeData: ResumeData, jdText: string): ATSSc
     else if (skillsMatchCount >= 3) roleFitScore += 3;
     else if (skillsMatchCount >= 1) roleFitScore += 1;
   } else {
-    // Dynamic role alignment based on inferred role confidence
-    const confidence = roleInference.confidence;
-    const skillCount = allMatches.length;
+    // Generic mode: Focus on resume completeness and internal consistency
+    // Summary quality and alignment with experience
+    const summary = resumeData.personalInfo.summary || '';
+    const hasGoodSummary = summary.length >= 100;
+    const hasExcellentSummary = summary.length >= 200;
     
-    // Role confidence scoring (0-8 points)
-    if (confidence >= 0.8) roleFitScore += 8; // Very high confidence
-    else if (confidence >= 0.6) roleFitScore += 6; // High confidence
-    else if (confidence >= 0.4) roleFitScore += 4; // Medium confidence
-    else if (confidence >= 0.2) roleFitScore += 2; // Low confidence
+    if (hasExcellentSummary) roleFitScore += 8; // Comprehensive summary
+    else if (hasGoodSummary) roleFitScore += 6; // Good summary
+    else if (summary.length > 0) roleFitScore += 3; // Basic summary
+    else roleFitScore += 0; // No summary
     
-    // Skills alignment with role expectations
-    const expectedSkills = standards.expectedSkills;
-    if (skillCount >= expectedSkills) roleFitScore += 5; // Meets expectations
-    else if (skillCount >= standards.minSkills) roleFitScore += 3; // Minimum requirements
-    else roleFitScore += 1; // Below minimum
+    // Check if summary aligns with experience (mentions skills/roles from experience)
+    const experienceText = resumeData.experience.map(exp => 
+      `${exp.title || ''} ${exp.company || ''} ${Array.isArray(exp.description) ? exp.description.join(' ') : ''}`
+    ).join(' ').toLowerCase();
     
-    // Cap dynamic role fit to 15
-    roleFitScore = Math.min(roleFitScore, 15);
+    const summaryWords = summary.toLowerCase().split(/\s+/).filter(w => w.length > 4);
+    const summaryMatchesExperience = summaryWords.some(word => 
+      experienceText.includes(word)
+    );
+    
+    if (summaryMatchesExperience && hasGoodSummary) roleFitScore += 5; // Summary aligns with experience
+    else if (summaryMatchesExperience) roleFitScore += 3; // Some alignment
+    
+    // Skills count bonus
+    const skillCount = (resumeData.skills || []).length;
+    if (skillCount >= 15) roleFitScore += 2; // Comprehensive skills
+    else if (skillCount >= 8) roleFitScore += 1; // Good skill coverage
+    
+    // Cap generic role fit to 20 (more lenient than JD-specific)
+    roleFitScore = Math.min(roleFitScore, 20);
   }
   
   // 3. Experience Evidence (Dynamic based on role level and industry standards)
@@ -361,44 +386,45 @@ export const calculateATSScore = (resumeData: ResumeData, jdText: string): ATSSc
         (exp.endDate && new Date().getFullYear() - new Date(exp.endDate).getFullYear() <= 2));
       if (hasRecentExperience) experienceScore += 3;
     } else {
-      // Dynamic experience scoring based on role level and industry standards
-      const minYears = standards.experienceYears;
-      const strongYears = standards.strongExperienceYears;
+      // Generic mode: Focus on experience quality and completeness
+      const experienceCount = resumeData.experience.length;
       
-      // Years of experience scoring
-      if (totalYears >= strongYears) experienceScore += 12; // Exceeds expectations
-      else if (totalYears >= minYears) experienceScore += 8; // Meets expectations
-      else if (totalYears >= Math.max(minYears - 1, 0)) experienceScore += 5; // Close to expectations
-      else experienceScore += 2; // Below expectations
-
+      // Base score for having experience entries
+      if (experienceCount >= 3) experienceScore += 10; // Multiple experiences
+      else if (experienceCount >= 2) experienceScore += 7; // Some experience
+      else if (experienceCount >= 1) experienceScore += 4; // At least one experience
+      
+      // Quality of experience descriptions
+      const experiencesWithDescriptions = resumeData.experience.filter(exp => 
+        Array.isArray(exp.description) && exp.description.length > 0
+      ).length;
+      
+      if (experiencesWithDescriptions === experienceCount && experienceCount > 0) {
+        experienceScore += 5; // All experiences have descriptions
+      } else if (experiencesWithDescriptions >= experienceCount * 0.7) {
+        experienceScore += 3; // Most experiences have descriptions
+      } else if (experiencesWithDescriptions > 0) {
+        experienceScore += 1; // Some descriptions present
+      }
+      
+      // Check for detailed descriptions (multiple bullet points)
+      const hasDetailedDescriptions = resumeData.experience.some(exp => 
+        Array.isArray(exp.description) && exp.description.length >= 3
+      );
+      if (hasDetailedDescriptions) experienceScore += 3; // Detailed experience descriptions
+      
       // Recency bonus
       const hasRecentExperience = resumeData.experience.some(exp => exp.current || 
         (exp.endDate && new Date().getFullYear() - new Date(exp.endDate).getFullYear() <= 2));
-      if (hasRecentExperience) experienceScore += 3;
+      if (hasRecentExperience) experienceScore += 2;
 
-      // Relevance bonus: descriptions containing role-relevant keywords
-      const relevantExperienceCount = resumeData.experience.filter(exp => 
-        Array.isArray(exp.description) && exp.description.some(desc => {
-          const descLower = desc.toLowerCase();
-          return allMatches.some(match => descLower.includes(match.toLowerCase()));
-        })
-      ).length;
-      
-      if (relevantExperienceCount >= 2) experienceScore += 4; // Multiple relevant experiences
-      else if (relevantExperienceCount >= 1) experienceScore += 2; // Some relevant experience
-      
-      // Leadership/management experience bonus for senior roles
-      if (roleLevel === 'senior' || roleLevel === 'lead') {
-        const hasLeadership = resumeData.experience.some(exp => 
-          Array.isArray(exp.description) && exp.description.some(desc => 
-            /lead|manage|mentor|team|supervise|direct|coordinate|oversee|guide|train/i.test(desc)
-          )
-        );
-        if (hasLeadership) experienceScore += 3;
-      }
+      // Years of experience bonus (more lenient)
+      if (totalYears >= 5) experienceScore += 3; // Experienced professional
+      else if (totalYears >= 2) experienceScore += 2; // Some experience
+      else if (totalYears >= 1) experienceScore += 1; // Entry level
 
-      // Cap dynamic experience to 20
-      experienceScore = Math.min(experienceScore, 20);
+      // Cap generic experience to 25 (more lenient than JD-specific)
+      experienceScore = Math.min(experienceScore, 25);
     }
   }
   
@@ -435,25 +461,29 @@ export const calculateATSScore = (resumeData: ResumeData, jdText: string): ATSSc
       });
       if (fieldRelevance) educationScore += 0.5;
     } else {
-      // Dynamic education scoring for non-JD resumes using role-relevant degrees
-      const roleDegrees: Record<string, string[]> = {
-        'software_engineer': ['bachelor', 'master', 'b.tech', 'be', 'bs cs', 'computer science', 'engineering'],
-        'data_scientist': ['master', 'phd', 'statistics', 'mathematics', 'computer science', 'data science'],
-        'product_manager': ['bachelor', 'mba', 'business', 'economics', 'engineering'],
-        'marketing_specialist': ['marketing', 'communications', 'business', 'mba', 'bachelor'],
-        'business_analyst': ['business', 'information systems', 'engineering', 'economics', 'bachelor', 'master'],
-        'devops_engineer': ['bachelor', 'master', 'computer science', 'engineering', 'information technology'],
-        'data_engineer': ['bachelor', 'master', 'computer science', 'engineering', 'data science'],
-        'mobile_developer': ['bachelor', 'master', 'computer science', 'engineering'],
-        'full_stack_developer': ['bachelor', 'master', 'computer science', 'engineering'],
-        'cloud_architect': ['bachelor', 'master', 'computer science', 'engineering', 'information technology']
-      };
+      // Generic mode: Focus on education completeness rather than role relevance
+      const educationCount = resumeData.education.length;
       
-      const relevantDegrees = roleDegrees[roleInference.role] || ['bachelor', 'master', 'mba', 'diploma', 'certification'];
-      const hasRelevantDegree = resumeData.education.some(edu => 
-        edu.degree && relevantDegrees.some((degree: string) => edu.degree.toLowerCase().includes(degree))
+      // Base score for having education entries
+      if (educationCount >= 2) educationScore += 3; // Multiple education entries
+      else if (educationCount >= 1) educationScore += 2; // At least one education entry
+      
+      // Check for complete education information
+      const completeEducationEntries = resumeData.education.filter(edu => 
+        edu.degree && edu.institution
+      ).length;
+      
+      if (completeEducationEntries === educationCount && educationCount > 0) {
+        educationScore += 3; // All entries have degree and institution
+      } else if (completeEducationEntries > 0) {
+        educationScore += 1; // Some complete entries
+      }
+      
+      // Degree level bonus (any degree is good)
+      const hasDegree = resumeData.education.some(edu => 
+        edu.degree && /bachelor|master|phd|mba|degree|diploma|certification/i.test(edu.degree)
       );
-      if (hasRelevantDegree) educationScore += 2;
+      if (hasDegree) educationScore += 2;
     }
     
     // GPA bonus (universal)
@@ -525,16 +555,13 @@ export const calculateATSScore = (resumeData: ResumeData, jdText: string): ATSSc
               finalScore >= 50 ? 'Basic ATS optimization - significant improvements needed' : 
               'Requires major ATS optimization';
   } else {
-    // Dynamic role-based feedback
-    const roleName = roleInference.role.replace('_', ' ').replace(/\b\w/g, l => l.toUpperCase());
-    const confidence = Math.round(roleInference.confidence * 100);
-    
-    feedback = finalScore >= 90 ? `Exceptional ATS score! Strong ${roleName} profile (${confidence}% confidence).` : 
-              finalScore >= 80 ? `Excellent ATS optimization! Good ${roleName} profile (${confidence}% confidence).` : 
-              finalScore >= 70 ? `Good ATS optimization for ${roleName} role. Consider adding more relevant skills.` : 
-              finalScore >= 60 ? `Fair ATS optimization. ${roleName} profile needs strengthening.` : 
-              finalScore >= 50 ? `Basic ATS optimization. Consider focusing on ${roleName} skills and experience.` : 
-              `Requires major ATS optimization. Resume needs more ${roleName}-specific content.`;
+    // Generic mode feedback - focused on resume quality
+    feedback = finalScore >= 90 ? 'Exceptional resume quality! Your resume is well-structured and complete.' : 
+              finalScore >= 80 ? 'Excellent resume quality! Your resume is well-organized and comprehensive.' : 
+              finalScore >= 70 ? 'Good resume quality. Your resume is well-structured with room for minor improvements.' : 
+              finalScore >= 60 ? 'Fair resume quality. Consider adding more details to strengthen your resume.' : 
+              finalScore >= 50 ? 'Basic resume quality. Your resume needs more content and detail.' : 
+              'Resume needs improvement. Add more experience details, skills, and a comprehensive summary.';
   }
   
   return {

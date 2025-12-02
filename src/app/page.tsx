@@ -49,7 +49,7 @@ export default function Home() {
                 <div className="pill bg-white border border-gray-200 !rounded-full !py-2 !px-3 text-gray-700">
                   <span className="inline-flex items-center gap-2">
                     <span className="h-2 w-2 rounded-full bg-emerald-500"></span>
-                    98% users improved ATS score
+                    Improve ATS score
                   </span>
                 </div>
                 <div className="pill bg-white border border-gray-200 !rounded-full !py-2 !px-3 text-gray-700">

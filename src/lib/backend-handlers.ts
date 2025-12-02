@@ -1193,23 +1193,23 @@ P.S. Please find my resume attached with detailed metrics`;
       const uploadTime = Date.now() - uploadStart;
       console.log(`File uploaded successfully in ${uploadTime}ms, ID:`, uploadedFile.id);
       
-      // Ultra-short prompt for maximum speed
-      const prompt = `Extract resume data as JSON:
+      // Clear prompt with actual placeholder text
+      const prompt = `Extract ALL data from the resume file and return as JSON:
 
 {
   "personalInfo": {
-    "fullName": "name",
-    "email": "email", 
-    "phone": "phone",
-    "location": "location",
-    "linkedin": "linkedin",
-    "website": "website",
-    "summary": "EXACT summary text from resume - preserve original wording, metrics, and achievements"
+    "fullName": "actual name from resume",
+    "email": "actual email", 
+    "phone": "actual phone",
+    "location": "actual location",
+    "linkedin": "actual linkedin",
+    "website": "actual website",
+    "summary": "actual summary text from resume"
   },
-  "experience": [{"id": 1, "title": "title", "company": "company", "location": "location", "startDate": "YYYY-MM", "endDate": "YYYY-MM", "current": false, "description": ["bullet1", "bullet2"]}, {"id": 2, "title": "title2", "company": "company2", "location": "location2", "startDate": "YYYY-MM", "endDate": "YYYY-MM", "current": false, "description": ["bullet1", "bullet2"]}],
-  "education": [{"id": 1, "degree": "degree", "institution": "institution", "location": "location", "year": "year", "gpa": "gpa"}],
-  "skills": ["skill1", "skill2"],
-  "projects": [{"id": 1, "name": "name", "description": "desc", "technologies": ["tech1"], "link": "link"}]
+  "experience": [{"id": 1, "title": "actual job title", "company": "actual company", "location": "actual location", "startDate": "YYYY-MM", "endDate": "YYYY-MM", "current": false, "description": ["actual bullet 1", "actual bullet 2"]}],
+  "education": [{"id": 1, "degree": "actual degree", "institution": "actual school", "location": "actual location", "year": "actual year", "gpa": "actual gpa"}],
+  "skills": ["actual skill 1", "actual skill 2"],
+  "projects": [{"id": 1, "name": "actual project", "description": "actual description", "technologies": ["actual tech"], "link": "actual link"}]
 }
 
 CRITICAL: For the "summary" field, you MUST copy the EXACT text from the resume's summary/professional summary section. Do NOT:
@@ -1219,14 +1219,18 @@ CRITICAL: For the "summary" field, you MUST copy the EXACT text from the resume'
 - Change any metrics or numbers
 - Modify the structure or format
 
-Copy the summary word-for-word exactly as it appears in the resume. If no summary exists, use "".`;
+Copy the summary word-for-word exactly as it appears in the resume. If no summary exists, use "".
+
+IMPORTANT: Detect and preserve bold text formatting by wrapping bold text with **double asterisks**. For example:
+- If the resume shows "Revenue Growth & Strategic Planning:" in bold, extract it as: "**Revenue Growth & Strategic Planning:** regular text here"
+- Only mark text that is actually bold in the original document`;
 
       // Use fastest available model for speed
       const assistant = await client.beta.assistants.create({
         name: "Resume Parser",
         model: "gpt-4o-mini", // Fastest available model for Assistants API
         tools: [{ type: "file_search" }],
-        instructions: "Extract resume data as fast as possible. For the summary field, copy the EXACT text from the resume without any changes, paraphrasing, or improvements. Preserve all metrics, numbers, achievements, and original wording. Do not summarize or rewrite the summary."
+        instructions: "Extract resume data as fast as possible. For the summary field, copy the EXACT text from the resume without any changes, paraphrasing, or improvements. Preserve all metrics, numbers, achievements, and original wording. Do not summarize or rewrite the summary. IMPORTANT: Detect and preserve bold text formatting by wrapping bold text with **double asterisks** (e.g., **Bold Text:** regular text). Only mark text that is actually bold in the original document."
       });
       
       const thread = await client.beta.threads.create({
@@ -1246,7 +1250,7 @@ Copy the summary word-for-word exactly as it appears in the resume. If no summar
       
       // Ultra-aggressive polling with 15-second timeout
       let runStatus = await client.beta.threads.runs.retrieve(thread.id, run.id);
-      let attempts = 0;
+      let attempts = 3;
       const maxAttempts = 10; // 15 seconds max (15 * 1s = 15s)
       
       while ((runStatus.status === 'in_progress' || runStatus.status === 'queued') && attempts < maxAttempts) {

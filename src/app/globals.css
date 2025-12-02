@@ -50,7 +50,7 @@
 .pdf-exporting .icon-box { display: none; }
 
 /* Google Fonts */
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=Montserrat:wght@600;700&family=Open+Sans:wght@400;600&family=Roboto:wght@400;500&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&family=Montserrat:wght@600;700&family=Open+Sans:wght@400;600&family=Roboto:wght@400;500&family=Rubik:wght@400;500;600;700&display=swap');
 
 :root {
   /* Light Mode */

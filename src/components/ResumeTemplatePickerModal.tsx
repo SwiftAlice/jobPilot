@@ -17,7 +17,8 @@ const TEMPLATE_OPTIONS: TemplateOption[] = [
   { id: 'modern', name: 'Modern Professional' },
   { id: 'minimal', name: 'Minimal' },
   { id: 'creative', name: 'Creative' },
-  { id: 'classic', name: 'Classic' }
+  { id: 'classic', name: 'Classic' },
+  { id: 'skyline', name: 'Skyline Signature' }
 ];
 
 export default function ResumeTemplatePickerModal({ isOpen, onClose, onConfirm }: ResumeTemplatePickerModalProps) {

@@ -6,10 +6,19 @@ import {
   Wand2,
   Loader2,
   X,
-  Target
+  Target,
+  Clock,
+  Trash2
 } from 'lucide-react';
 import { ResumeData, UploadedFiles } from '@/types/resume-builder-types';
 import { supabase } from '@/lib/supabaseClient';
+
+interface ParsedResume {
+  id: string;
+  fileName: string;
+  parsedAt: string;
+  resumeData: ResumeData;
+}
 
 interface ResumeFormProps {
   localResumeData: ResumeData;
@@ -53,6 +62,9 @@ interface ResumeFormProps {
   inputJDForTailoring?: string;
   authenticated: boolean;
   user?: any;
+  onSaveParsedResume?: (fileName: string, resumeData: ResumeData) => void;
+  selectedModel: 'FASTEST' | 'FAST' | 'BALANCED' | 'QUALITY';
+  setSelectedModel: (model: 'FASTEST' | 'FAST' | 'BALANCED' | 'QUALITY') => void;
 }
 
 const ResumeForm: React.FC<ResumeFormProps> = ({
@@ -96,10 +108,102 @@ const ResumeForm: React.FC<ResumeFormProps> = ({
   isTailoringSummary,
   inputJDForTailoring,
   authenticated,
-  user
+  user,
+  onSaveParsedResume,
+  selectedModel,
+  setSelectedModel
 }) => {
   const [showJDModal, setShowJDModal] = useState(false);
   const [tempJD, setTempJD] = useState('');
+  const [previouslyParsedResumes, setPreviouslyParsedResumes] = useState<ParsedResume[]>([]);
+
+  // Load previously parsed resumes from localStorage
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const stored = localStorage.getItem('previouslyParsedResumes');
+        if (stored) {
+          const parsed = JSON.parse(stored);
+          setPreviouslyParsedResumes(parsed);
+        }
+      } catch (e) {
+        console.error('Error loading previously parsed resumes:', e);
+      }
+    }
+  }, []);
+
+  // Save parsed resume to localStorage
+  const saveParsedResume = (fileName: string, resumeData: ResumeData) => {
+    if (typeof window === 'undefined') return;
+    
+    try {
+      const newParsedResume: ParsedResume = {
+        id: Date.now().toString(),
+        fileName,
+        parsedAt: new Date().toISOString(),
+        resumeData: { ...resumeData }
+      };
+      
+      const existing = localStorage.getItem('previouslyParsedResumes');
+      let parsedResumes: ParsedResume[] = [];
+      
+      if (existing) {
+        parsedResumes = JSON.parse(existing);
+      }
+      
+      // Remove duplicate by fileName (keep the latest)
+      parsedResumes = parsedResumes.filter(p => p.fileName !== fileName);
+      
+      // Add new one at the beginning
+      parsedResumes.unshift(newParsedResume);
+      
+      // Keep only last 10
+      if (parsedResumes.length > 10) {
+        parsedResumes = parsedResumes.slice(0, 10);
+      }
+      
+      localStorage.setItem('previouslyParsedResumes', JSON.stringify(parsedResumes));
+      setPreviouslyParsedResumes(parsedResumes);
+      
+      // Also call the parent callback if provided
+      if (onSaveParsedResume) {
+        onSaveParsedResume(fileName, resumeData);
+      }
+    } catch (e) {
+      console.error('Error saving parsed resume:', e);
+    }
+  };
+
+  // Load a previously parsed resume
+  const loadParsedResume = (parsedResume: ParsedResume) => {
+    setLocalResumeData(parsedResume.resumeData);
+    setExtractedData(parsedResume.resumeData);
+    setUseResumeUpload(true);
+    setUseManualInput(false);
+    // Create a proper File object for display purposes
+    const emptyBlob = new Blob([], { type: 'application/pdf' });
+    const fakeFile = new File([emptyBlob], parsedResume.fileName, {
+      type: 'application/pdf',
+      lastModified: new Date(parsedResume.parsedAt).getTime()
+    });
+    setUploadedFiles(prev => ({
+      ...prev,
+      resume: fakeFile
+    }));
+  };
+
+  // Delete a previously parsed resume
+  const deleteParsedResume = (id: string) => {
+    if (typeof window === 'undefined') return;
+    
+    try {
+      const updated = previouslyParsedResumes.filter(p => p.id !== id);
+      localStorage.setItem('previouslyParsedResumes', JSON.stringify(updated));
+      setPreviouslyParsedResumes(updated);
+    } catch (e) {
+      console.error('Error deleting parsed resume:', e);
+    }
+  };
 
   const handleJDSubmit = () => {
     setInputJD(tempJD);
@@ -205,6 +309,73 @@ const ResumeForm: React.FC<ResumeFormProps> = ({
       {useResumeUpload && (
         <div className="mb-12">
           <div className="max-w-3xl mx-auto">
+            {/* Model Selection */}
+            <div className="mb-6 bg-white rounded-xl shadow-sm p-5 border border-gray-200">
+              <label className="block text-sm font-semibold text-gray-900 mb-3">
+                Parsing Model Quality
+              </label>
+              <div className="grid grid-cols-4 gap-3">
+                <button
+                  onClick={() => setSelectedModel('FASTEST')}
+                  className={`px-4 py-3 rounded-lg font-medium text-sm transition-all ${
+                    selectedModel === 'FASTEST'
+                      ? 'bg-gradient-to-r from-blue-600 to-teal-600 text-white shadow-md'
+                      : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                  }`}
+                >
+                  <div className="flex flex-col items-center gap-1">
+                    <span>⚡ Fastest</span>
+                    <span className="text-xs opacity-80">~10s</span>
+                  </div>
+                </button>
+                <button
+                  onClick={() => setSelectedModel('FAST')}
+                  className={`px-4 py-3 rounded-lg font-medium text-sm transition-all ${
+                    selectedModel === 'FAST'
+                      ? 'bg-gradient-to-r from-blue-600 to-teal-600 text-white shadow-md'
+                      : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                  }`}
+                >
+                  <div className="flex flex-col items-center gap-1">
+                    <span>🚀 Fast</span>
+                    <span className="text-xs opacity-80">~20s</span>
+                  </div>
+                </button>
+                <button
+                  onClick={() => setSelectedModel('BALANCED')}
+                  className={`px-4 py-3 rounded-lg font-medium text-sm transition-all ${
+                    selectedModel === 'BALANCED'
+                      ? 'bg-gradient-to-r from-blue-600 to-teal-600 text-white shadow-md'
+                      : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                  }`}
+                >
+                  <div className="flex flex-col items-center gap-1">
+                    <span>⚖️ Balanced</span>
+                    <span className="text-xs opacity-80">~30s</span>
+                  </div>
+                </button>
+                <button
+                  onClick={() => setSelectedModel('QUALITY')}
+                  className={`px-4 py-3 rounded-lg font-medium text-sm transition-all ${
+                    selectedModel === 'QUALITY'
+                      ? 'bg-gradient-to-r from-blue-600 to-teal-600 text-white shadow-md'
+                      : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                  }`}
+                >
+                  <div className="flex flex-col items-center gap-1">
+                    <span>✨ Quality</span>
+                    <span className="text-xs opacity-80">~45s</span>
+                  </div>
+                </button>
+              </div>
+              <p className="text-xs text-gray-600 mt-3">
+                {selectedModel === 'FASTEST' && '⚡ Ultra-fast parsing'}
+                {selectedModel === 'FAST' && '🚀 Fast and reliable parsing'}
+                {selectedModel === 'BALANCED' && '⚖️ Great balance of speed and accuracy'}
+                {selectedModel === 'QUALITY' && '✨ Best accuracy with bold text detection'}
+              </p>
+            </div>
+            
             <div className="border-2 border-dashed border-teal-300 rounded-2xl p-12 text-center bg-teal-50">
               <input
                 type="file"
@@ -435,6 +606,50 @@ const ResumeForm: React.FC<ResumeFormProps> = ({
             <div>{tailorSummaryToJD ? '✓' : '✗'} Function: {tailorSummaryToJD ? 'Available' : 'Missing'}</div>
             <div className="mt-2 font-medium">
               All Conditions Met: {(useResumeUpload || useManualInput) && inputJDForTailoring?.trim() && localResumeData.personalInfo.summary && tailorSummaryToJD ? 'YES' : 'NO'}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Previously Parsed Resumes Section */}
+      {previouslyParsedResumes.length > 0 && (
+        <div className="max-w-3xl mx-auto mb-8">
+          <div className="bg-gray-50 border border-gray-200 rounded-2xl p-6">
+            <div className="flex items-center gap-2 mb-4">
+              <Clock className="w-5 h-5 text-gray-600" />
+              <h3 className="text-lg font-semibold text-gray-800">Previously Parsed Resumes</h3>
+            </div>
+            <p className="text-sm text-gray-600 mb-4">Click on a resume below to load it without re-parsing</p>
+            <div className="space-y-2">
+              {previouslyParsedResumes.map((parsedResume) => (
+                <div
+                  key={parsedResume.id}
+                  className="flex items-center justify-between p-4 bg-white border border-gray-200 rounded-lg hover:border-teal-400 hover:shadow-md transition-all cursor-pointer group"
+                  onClick={() => loadParsedResume(parsedResume)}
+                >
+                  <div className="flex items-center gap-3 flex-1">
+                    <FileUp className="w-5 h-5 text-teal-600" />
+                    <div className="flex-1">
+                      <div className="font-medium text-gray-900 group-hover:text-teal-600 transition-colors">
+                        {parsedResume.fileName}
+                      </div>
+                      <div className="text-xs text-gray-500 mt-1">
+                        Parsed {new Date(parsedResume.parsedAt).toLocaleDateString()} at {new Date(parsedResume.parsedAt).toLocaleTimeString()}
+                      </div>
+                    </div>
+                  </div>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      deleteParsedResume(parsedResume.id);
+                    }}
+                    className="p-2 text-gray-400 hover:text-red-600 transition-colors opacity-0 group-hover:opacity-100"
+                    title="Delete"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
+              ))}
             </div>
           </div>
         </div>

@@ -71,39 +71,53 @@ export const ALTERNATIVE_PROVIDERS = {
 } as const;
 
 // Current configuration
-export const CURRENT_MODEL = LLM_MODELS.FASTEST; // Change this to switch models
+export const CURRENT_MODEL = LLM_MODELS.QUALITY; // Using GPT-4o for better formatting detection
 
 // Model-specific configurations
 export const MODEL_CONFIGS = {
   'gpt-3.5-turbo': {
     maxTokens: 2000,
     temperature: 0.1,
-    timeout: 45000, // 45 seconds
-    pollingInterval: 500 // 500ms
+    timeout: 120000, // 120 seconds (2 minutes)
+    pollingInterval: 1000 // 1 second
   },
   'gpt-4o-mini': {
     maxTokens: 2000,
     temperature: 0.1,
-    timeout: 20000, // 20 seconds
+    timeout: 120000, // 120 seconds (2 minutes)
     pollingInterval: 1000 // 1 second
   },
   'gpt-4o-mini-2024-07-18': {
     maxTokens: 2000,
     temperature: 0.1,
-    timeout: 15000, // 15 seconds
-    pollingInterval: 500 // 500ms
+    timeout: 120000, // 120 seconds (2 minutes)
+    pollingInterval: 1000 // 1 second
   },
   'gpt-4o': {
     maxTokens: 2000,
     temperature: 0.1,
-    timeout: 30000, // 30 seconds
-    pollingInterval: 1000 // 1 second
+    timeout: 180000, // 180 seconds (3 minutes)
+    pollingInterval: 1500 // 1.5 seconds
   }
 } as const;
 
+// Current model storage (can be overridden at runtime)
+let activeModel: typeof LLM_MODELS[keyof typeof LLM_MODELS] = CURRENT_MODEL;
+
 // Get current model configuration
 export function getCurrentModelConfig() {
-  return MODEL_CONFIGS[CURRENT_MODEL.name as keyof typeof MODEL_CONFIGS] || MODEL_CONFIGS['gpt-3.5-turbo'];
+  return MODEL_CONFIGS[activeModel.name as keyof typeof MODEL_CONFIGS] || MODEL_CONFIGS['gpt-3.5-turbo'];
+}
+
+// Get active model
+export function getActiveModel() {
+  return activeModel;
+}
+
+// Set active model (for UI selection)
+export function setActiveModel(modelKey: keyof typeof LLM_MODELS) {
+  activeModel = LLM_MODELS[modelKey];
+  return activeModel;
 }
 
 // Performance recommendations based on use case

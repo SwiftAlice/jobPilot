@@ -42,7 +42,7 @@ export const API_CONFIG = {
   // Gmail API Configuration
   GOOGLE_CLIENT_ID: process.env.GOOGLE_CLIENT_ID || '',
   GOOGLE_CLIENT_SECRET: process.env.GOOGLE_CLIENT_SECRET || '',
-  GOOGLE_REDIRECT_URI: process.env.GOOGLE_REDIRECT_URI || 'https://job-pilot-s9ab.vercel.app/api/gmail/callback',
+  GOOGLE_REDIRECT_URI: process.env.GOOGLE_REDIRECT_URI || '',
 
   // Security
   SECURITY: {
@@ -119,7 +119,7 @@ export const DB_CONFIG = {
   // PostgreSQL (if using)
   POSTGRES: {
     HOST: process.env.POSTGRES_HOST || 'localhost',
-    PORT: parseInt(process.env.POSTGRES_PORT || '5432'),
+    PORT: parseInt(process.env.POSTGRES_PORT || '6543'),
     DATABASE: process.env.POSTGRES_DB || 'resume_builder',
     USERNAME: process.env.POSTGRES_USER || 'postgres',
     PASSWORD: process.env.POSTGRES_PASSWORD || '',

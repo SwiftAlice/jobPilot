@@ -2,12 +2,14 @@
 
 export interface PersonalInfo {
   fullName: string;
+  title?: string;
   email: string;
   phone: string;
   location: string;
   linkedin: string;
   website: string;
   summary: string;
+  profileImageDataUrl?: string;
 }
 
 export interface Experience {
@@ -45,6 +47,14 @@ export interface ResumeData {
   skills: string[];
   projects: Project[];
   achievements: string[];
+  sectionTitles?: {
+    summary?: string;
+    skills?: string;
+    experience?: string;
+    education?: string;
+    projects?: string;
+    achievements?: string;
+  };
 }
 
 export interface JDData {

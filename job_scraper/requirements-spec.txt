@@ -1,0 +1,8 @@
+# Additional requirements for new architecture (M1 + M2)
+httpx>=0.25.0
+python-dateutil>=2.8.2
+redis>=5.0.0
+psycopg2-binary>=2.9.9
+beautifulsoup4>=4.12.0
+playwright>=1.40.0
+
