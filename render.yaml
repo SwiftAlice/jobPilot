@@ -5,7 +5,9 @@ services:
     rootDir: job_scraper
     buildCommand: |
       pip install --upgrade pip setuptools wheel \
-      && pip install -r requirements.txt
+      && pip install -r requirements.txt \
+      && playwright install chromium || true \
+      && (playwright install-deps chromium || echo "Note: Playwright deps install skipped (may require system permissions)")
     startCommand: gunicorn app:app -b 0.0.0.0:$PORT
     envVars:
       - key: PYTHON_VERSION
