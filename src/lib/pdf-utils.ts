@@ -607,8 +607,13 @@ export const generatePDFFromDom = async (element: HTMLElement, filename?: string
 
       const exportId = `pdf-page-${Date.now()}`;
       pageElement.setAttribute('data-export-id', exportId);
-      
-      const exportScale = Math.min(4, Math.max(2.5, (window.devicePixelRatio || 1) * 2.5));
+      // Use a lower export scale when generating a buffer-only PDF (for email attachments)
+      // to keep file size smaller while maintaining reasonable quality.
+      const isBufferOnlyExport = filename === '__BUFFER_ONLY__';
+      const baseScale = (window.devicePixelRatio || 1) * (isBufferOnlyExport ? 1.5 : 2.5);
+      const exportScale = isBufferOnlyExport
+        ? Math.min(2.5, Math.max(1.5, baseScale))
+        : Math.min(4, Math.max(2.5, baseScale));
       const canvas = await html2canvas(pageElement, {
         scale: exportScale,
         backgroundColor: computedPageBg || '#ffffff',
@@ -826,7 +831,9 @@ export const generatePDFFromDom = async (element: HTMLElement, filename?: string
         finalCanvas = correctedCanvas;
       }
       
-      const imageData = finalCanvas.toDataURL('image/png');
+      // Use JPEG with medium-high quality to significantly reduce attachment size,
+      // especially for Gmail drafts, while staying visually close to the preview.
+      const imageData = finalCanvas.toDataURL('image/jpeg', isBufferOnlyExport ? 0.82 : 0.9);
       // Place image at (0, 0) with exact 210mm width and the page's true height
       const imageWidthMm = PAGE_CONFIG.widthMm;
       const imageHeightMm = pageHeightMm;
@@ -883,6 +890,8 @@ export const generatePDFFromDom = async (element: HTMLElement, filename?: string
       orientation: 'portrait',
     });
     
+    const isBufferOnlyExport = filename === '__BUFFER_ONLY__';
+
     for (let i = 0; i < pagesWithContent.length; i++) {
       const pageElement = pagesWithContent[i];
       const measuredHeightPx = Math.max(
@@ -954,8 +963,11 @@ export const generatePDFFromDom = async (element: HTMLElement, filename?: string
 
       const exportId = `pdf-page-${i}-${Date.now()}`;
       pageElement.setAttribute('data-export-id', exportId);
-      
-      const exportScalePerPage = Math.min(4, Math.max(2.5, (window.devicePixelRatio || 1) * 2.5));
+      // Lower export scale for buffer-only mode (email attachments) to reduce size.
+      const baseScalePerPage = (window.devicePixelRatio || 1) * (isBufferOnlyExport ? 1.5 : 2.5);
+      const exportScalePerPage = isBufferOnlyExport
+        ? Math.min(2.5, Math.max(1.5, baseScalePerPage))
+        : Math.min(4, Math.max(2.5, baseScalePerPage));
       const canvas = await html2canvas(pageElement, {
         scale: exportScalePerPage,
         backgroundColor: computedPageBg || '#ffffff',
@@ -1178,7 +1190,7 @@ export const generatePDFFromDom = async (element: HTMLElement, filename?: string
         finalCanvas = correctedCanvas;
       }
       
-      const imageData = finalCanvas.toDataURL('image/png');
+      const imageData = finalCanvas.toDataURL('image/jpeg', isBufferOnlyExport ? 0.82 : 0.9);
       // Maintain aspect ratio derived from canvas to prevent vertical compression
       const imageWidthMm = PAGE_CONFIG.widthMm;
       const imageHeightMm = (finalCanvas.height / finalCanvas.width) * imageWidthMm;

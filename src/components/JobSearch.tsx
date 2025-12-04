@@ -187,8 +187,8 @@ export default function JobSearch({ onJobSelect, className = '' }: JobSearchProp
     experience_level: '',
     where: '',  // Default to "Any" (empty string) instead of "Remote"
     max_results: 500,  // Increased to show all jobs (was 50)
-    // Default to Adzuna for testing
-    sources: ['jooble']
+    // Enable all job sources by default
+    sources: ['remoteok', 'adzuna', 'jooble', 'linkedin', 'iimjobs']
   });
   
   const [results, setResults] = useState<JobSearchResult | null>(null);

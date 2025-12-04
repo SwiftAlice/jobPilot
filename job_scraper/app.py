@@ -707,7 +707,8 @@ def search_new():
             search_location = None
         page = int(data.get('page', 1))
         page_size = int(data.get('page_size', 20))
-        sources = data.get('sources', ['remoteok'])
+        # Default to all enabled sources if none explicitly provided
+        sources = data.get('sources', ['remoteok', 'adzuna', 'jooble', 'linkedin', 'iimjobs'])
         # Filter out removed sources (naukri)
         if sources:
             sources = [s for s in sources if str(s).lower() != 'naukri']
