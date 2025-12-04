@@ -21,13 +21,41 @@ def get_db_pool() -> Optional[ThreadedConnectionPool]:
     """Create PostgreSQL connection pool.
 
     Expected envs (prefer in this order):
-      - SUPABASE_DB_URL (full Postgres URI)
+      - SUPABASE_DB_URL (full Postgres URI with password)
+      - SUPABASE_DB_URL (Postgres URI without password) + SUPABASE_DB_PASSWORD
       - PGHOST, PGUSER, PGPASSWORD, PGDATABASE, PGPORT
-      - SUPABASE_DB_URL (Postgres URI) + SUPABASE_DB_PASSWORD (NOT service role key)
+      - DATABASE_URL (full Postgres URI)
     """
-    # Preferred: full DB URL
-    db_url = os.getenv("SUPABASE_DB_URL") or os.getenv("DATABASE_URL")
-    # Fallback: discrete PG envs
+    db_url = None
+    
+    # First: Check if SUPABASE_DB_URL exists and SUPABASE_DB_PASSWORD is also set
+    # If both are set, combine them (password takes precedence)
+    supabase_url = os.getenv("SUPABASE_DB_URL")
+    db_password = os.getenv("SUPABASE_DB_PASSWORD")
+    
+    if supabase_url and db_password:
+        # Combine SUPABASE_DB_URL with SUPABASE_DB_PASSWORD
+        try:
+            import urllib.parse
+            parsed = urllib.parse.urlparse(supabase_url)
+            user = parsed.username or "postgres"
+            host = parsed.hostname
+            port = parsed.port or 6543
+            dbname = parsed.path.lstrip("/") or "postgres"
+            # Use the password from SUPABASE_DB_PASSWORD
+            db_url = f"postgresql://{user}:{db_password}@{host}:{port}/{dbname}"
+            print(f"[Deps] Using SUPABASE_DB_URL + SUPABASE_DB_PASSWORD (host={host}, port={port}, db={dbname})")
+        except Exception as e:
+            print(f"[Deps] Error parsing SUPABASE_DB_URL: {e}")
+            db_url = None
+    
+    # Second: If no password override, use SUPABASE_DB_URL or DATABASE_URL as-is
+    if not db_url:
+        db_url = os.getenv("SUPABASE_DB_URL") or os.getenv("DATABASE_URL")
+        if db_url:
+            print(f"[Deps] Using SUPABASE_DB_URL or DATABASE_URL as-is")
+    
+    # Third: Fallback to discrete PG envs
     if not db_url:
         host = os.getenv("PGHOST")
         user = os.getenv("PGUSER") or "postgres"
@@ -36,22 +64,10 @@ def get_db_pool() -> Optional[ThreadedConnectionPool]:
         port = int(os.getenv("PGPORT", "6543"))
         if host and password:
             db_url = f"postgresql://{user}:{password}@{host}:{port}/{dbname}"
-    # Legacy fallback: Supabase Postgres URL + explicit DB password
+            print(f"[Deps] Using discrete PG env vars (host={host}, port={port})")
+    
     if not db_url:
-        SUPABASE_DB_URL = os.getenv("SUPABASE_DB_URL")  # should be a Postgres URI
-        db_password = os.getenv("SUPABASE_DB_PASSWORD")
-        if SUPABASE_DB_URL and db_password:
-            try:
-                import urllib.parse
-                parsed = urllib.parse.urlparse(SUPABASE_DB_URL)
-                user = parsed.username or "postgres"
-                host = parsed.hostname
-                port = parsed.port or 6543
-                dbname = parsed.path.lstrip("/") or "postgres"
-                db_url = f"postgresql://{user}:{db_password}@{host}:{port}/{dbname}"
-            except Exception:
-                pass
-    if not db_url:
+        print("[Deps] No database configuration found. Check SUPABASE_DB_URL, SUPABASE_DB_PASSWORD, or PG* env vars.")
         return None
 
     # Ensure SSL and connect timeout (increased to 20s for reliability)
