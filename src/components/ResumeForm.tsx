@@ -227,7 +227,6 @@ const ResumeForm: React.FC<ResumeFormProps> = ({
   if (!authenticated) {
     return (
       <div className="relative">
-        <div className="absolute inset-0 -z-10 bg-gradient-to-br from-blue-50 via-teal-50 to-white rounded-2xl" />
         <div className="max-w-3xl mx-auto bg-white rounded-2xl shadow-xl ring-1 ring-gray-100 p-10 text-center">
           <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-gradient-to-br from-blue-600 to-teal-500 text-white shadow-lg mb-4">
             <svg viewBox="0 0 24 24" className="w-7 h-7" aria-hidden>

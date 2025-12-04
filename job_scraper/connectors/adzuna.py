@@ -29,7 +29,7 @@ class AdzunaConnector(JobConnector):
         if not self.app_id or not self.app_key:
             print("[Adzuna] Missing credentials")
             return []
-
+        
         jobs: List[RawJob] = []
 
         # Build per-profile phrases; we'll query Adzuna separately for each phrase
@@ -43,7 +43,7 @@ class AdzunaConnector(JobConnector):
 
         country = self._infer_country(query.location)
         is_remote = query.remote_type == "remote" or any("remote" in k.lower() for k in query.keywords)
-
+        
         async with httpx.AsyncClient(timeout=12.0) as client:
             # Treat each phrase as an OR branch: stop when we have enough jobs
             for phrase_idx, phrase in enumerate(phrases):
@@ -63,16 +63,16 @@ class AdzunaConnector(JobConnector):
                     if len(jobs) >= query.max_results:
                         break
 
-                    params = {
-                        "app_id": self.app_id,
-                        "app_key": self.app_key,
+                params = {
+                    "app_id": self.app_id,
+                    "app_key": self.app_key,
                         "what": phrase,
-                        "results_per_page": min(query.max_results, 50),
-                    }
+                    "results_per_page": min(query.max_results, 50),
+                }
                     # Location handling
-                    if is_remote:
-                        params["what_or"] = "remote"
-                        params["where"] = ""
+                if is_remote:
+                    params["what_or"] = "remote"
+                    params["where"] = ""
                     else:
                         # Use a normalized city-only location for Adzuna's "where" filter when not remote
                         if query.location:
@@ -82,29 +82,29 @@ class AdzunaConnector(JobConnector):
                             if city_only:
                                 params["where"] = city_only
 
-                    url = f"{self.base_url}/{country}/search/{page}"
-                    try:
-                        resp = await client.get(url, params=params)
-                        resp.raise_for_status()
-                        data = resp.json()
+                url = f"{self.base_url}/{country}/search/{page}"
+                try:
+                    resp = await client.get(url, params=params)
+                    resp.raise_for_status()
+                    data = resp.json()
 
                         results = data.get("results", [])
                         if phrase_idx == 0 and page == 1:
                             print(f"[Adzuna] First page results count for phrase '{phrase}': {len(results)}")
 
                         for job_data in results:
-                            raw = self._parse_job(job_data)
-                            if raw and (not since or (raw.posted_at and raw.posted_at >= since)):
-                                jobs.append(raw)
-                                if len(jobs) >= query.max_results:
-                                    break
+                        raw = self._parse_job(job_data)
+                        if raw and (not since or (raw.posted_at and raw.posted_at >= since)):
+                            jobs.append(raw)
+                            if len(jobs) >= query.max_results:
+                                break
 
                         # Stop paging this phrase if Adzuna has no more results
                         if not results:
-                            break
-                    except Exception as e:
+                        break
+                except Exception as e:
                         print(f"[Adzuna] Error phrase '{phrase}' page {page}: {e}")
-                        continue
+                    continue
         
         return jobs[:query.max_results]
     

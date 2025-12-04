@@ -3,9 +3,10 @@ import Link from 'next/link';
 import Image from 'next/image';
 import { useEffect, useState } from 'react';
 import { usePathname } from 'next/navigation';
+import { supabase } from '@/lib/supabaseClient';
 
 export default function Navigation() {
-  const [user, setUser] = useState<{ name: string|null, email: string|null } | null>(null);
+  const [user, setUser] = useState<{ name: string | null; email: string | null } | null>(null);
   const pathname = usePathname();
   const hidePrimaryNav = pathname?.startsWith('/jdBuilder') || pathname === '/jobs';
 
@@ -15,10 +16,21 @@ export default function Navigation() {
       try {
         const res = await fetch('/api/auth/session', { cache: 'no-store' });
         const data = await res.json();
-        if (mounted) setUser(data?.authenticated ? { name: data.user?.name ?? null, email: data.user?.email ?? null } : null);
-      } catch { if (mounted) setUser(null); }
+        if (mounted) {
+          setUser(
+            data?.authenticated
+              ? { name: data.user?.name ?? null, email: data.user?.email ?? null }
+              : null
+          );
+        }
+      } catch {
+        if (mounted) setUser(null);
+      }
     };
     load();
+    return () => {
+      mounted = false;
+    };
   }, []);
 
   return (
@@ -53,7 +65,19 @@ export default function Navigation() {
             <>
               <span className="hidden md:inline-block text-sm text-gray-600 truncate max-w-[120px]">{user.name || user.email}</span>
               <button
-                onClick={async () => { await fetch('/api/auth/logout', { method: 'POST' }); window.location.href = '/jdBuilder'; }}
+                onClick={async () => {
+                  try {
+                    // Client-side sign out to ensure Supabase auth cookies are cleared
+                    await supabase.auth.signOut();
+                    // Also call server-side logout to clear any httpOnly cookies
+                    await fetch('/api/auth/logout', { method: 'POST' });
+                  } catch (e) {
+                    console.error('Logout error:', e);
+                  } finally {
+                    // Hard redirect to ensure fresh session state
+                    window.location.href = '/jdBuilder';
+                  }
+                }}
                 className="px-4 py-2 rounded border border-gray-300 hover:bg-gray-50"
               >Logout</button>
             </>

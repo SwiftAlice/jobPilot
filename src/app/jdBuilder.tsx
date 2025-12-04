@@ -955,8 +955,8 @@ const ResumeJDBuilder = () => {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100">
-      <div className="container mx-auto px-4 py-8 bg-white">
+    <div className="min-h-screen bg-white">
+      <div className="container mx-auto px-4 py-8">
         {/* Saved Resumes Section */}
         {savedResumes.length > 0 && (
           <div className="mb-8">

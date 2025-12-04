@@ -70,7 +70,7 @@ class IIMJobsConnector(JobConnector):
                 
                 print(f"[IIMJobs] Fetching: {url}")
                 try:
-                    await page.goto(url, wait_until="networkidle", timeout=30000)
+                await page.goto(url, wait_until="networkidle", timeout=30000)
                     final_url = page.url
                     if final_url != url:
                         print(f"[IIMJobs] Redirected from {url} to {final_url}")
@@ -338,7 +338,7 @@ class IIMJobsConnector(JobConnector):
                             continue
                         
                         # Normalize URL
-                        if not url.startswith('http'):
+                            if not url.startswith('http'):
                             url = f"{self.base_url}{url}" if not url.startswith('/') else f"{self.base_url}{url}"
                         
                         # Filter out non-job URLs more carefully

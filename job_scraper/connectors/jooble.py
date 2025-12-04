@@ -57,18 +57,18 @@ class JoobleConnector(JobConnector):
                 pass
             
             # Try with location first
-            payload = {
+        payload = {
                 "keywords": phrase,
-                "location": location,
-                "page": 1,
-                "searchMode": 1,
-            }
-            
-            try:
-                async with httpx.AsyncClient(timeout=10.0) as client:
-                    resp = await client.post(self.base_url, json=payload)
-                    resp.raise_for_status()
-                    data = resp.json()
+            "location": location,
+            "page": 1,
+            "searchMode": 1,
+        }
+        
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.post(self.base_url, json=payload)
+                resp.raise_for_status()
+                data = resp.json()
                     
                     first_page_count = len(data.get("jobs", []))
                     if phrase_idx == 1:
@@ -93,12 +93,12 @@ class JoobleConnector(JobConnector):
                     for job_data in data.get("jobs", []):
                         if len(jobs) >= query.max_results:
                             break
-                        raw = self._parse_job(job_data)
-                        if raw and (not since or (raw.posted_at and raw.posted_at >= since)):
+                    raw = self._parse_job(job_data)
+                    if raw and (not since or (raw.posted_at and raw.posted_at >= since)):
                             # Check for duplicates by URL
                             if not any(j.url == raw.url for j in jobs):
-                                jobs.append(raw)
-            except Exception as e:
+                        jobs.append(raw)
+        except Exception as e:
                 print(f"[Jooble] Error phrase {phrase_idx} ('{phrase}'): {e}")
                 continue
         

@@ -891,7 +891,7 @@ export const generatePDFFromDom = async (element: HTMLElement, filename?: string
     });
     
     const isBufferOnlyExport = filename === '__BUFFER_ONLY__';
-
+    
     for (let i = 0; i < pagesWithContent.length; i++) {
       const pageElement = pagesWithContent[i];
       const measuredHeightPx = Math.max(
