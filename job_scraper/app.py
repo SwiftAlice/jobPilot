@@ -1054,12 +1054,13 @@ def search_new():
                                             except Exception:
                                                 stored_details = None
                                         if stored_profile_hash == profile_signature:
-                                        db_score = float(score_row[0]) if score_row[0] is not None else None
+                                            db_score = float(score_row[0]) if score_row[0] is not None else None
                                             if stored_details:
                                                 job['match_details'] = stored_details
-                                        if db_score is not None and idx < 5:
+                                            if db_score is not None and idx < 5:
                                                 print(f"[Search-New] Job {idx+1}: Found DB score {db_score*100:.1f}% (user_id={user_id}, profile={profile_signature})")
                                         else:
+                                            # Profile hash mismatch -> treat as stale score
                                             db_score = None  # Ignore stale scores
                             except Exception as db_score_err:
                                 if idx < 3:
